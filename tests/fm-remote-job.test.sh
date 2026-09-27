@@ -1055,7 +1055,7 @@ pass "an ousted worker in shutdown leaves the replacement quarantine untouched"
 
 # An idle worker must not busy-poll its queue: between passes it blocks on its
 # wake FIFO, so its only steady cost is the once-a-second heartbeat plus the
-# periodic sweep. Every external command the worker runs by name goes through
+# periodic sweep, which the 2-second stage reap age pulls in to every 2 seconds. Every external command the worker runs by name goes through
 # a counting shim, which makes the exec rate observable without privileges.
 QUIET_HOME="$TMP_ROOT/quiet-account"
 QUIET_STATE="$TMP_ROOT/quiet-state"
@@ -1074,49 +1074,87 @@ SH
 done
 HOME="$QUIET_HOME" PATH="$QUIET_SHIM:/usr/bin:/bin:/usr/sbin:/sbin" FM_TEST_EXEC_LOG="$QUIET_EXEC_LOG" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$QUIET_STATE" \
-  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_IDLE_WAIT_SECONDS=30 FM_REMOTE_JOB_SWEEP_SECONDS=2 \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_STAGE_REAP_SECONDS=2 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/quiet-worker.out" 2> "$TMP_ROOT/quiet-worker.err" &
 QUIET_WORKER_PID=$!
-for _ in $(seq 1 200); do
-  [ -f "$QUIET_STATE/worker.ready" ] && break
-  sleep 0.05
-done
-assert_present "$QUIET_STATE/worker.ready" "the idle-rate worker did not become ready"
+quiet_wait_ready() { # <state> <label>
+  for _ in $(seq 1 200); do
+    [ -f "$1/worker.ready" ] && break
+    sleep 0.05
+  done
+  assert_present "$1/worker.ready" "the $2 worker did not become ready"
+}
 # Startup counts as activity, so wait out its short fast-poll window (slowed by
 # the shims themselves) before measuring the idle steady state.
-QUIET_SETTLE_DEADLINE=$((SECONDS + 30))
-while [ "$SECONDS" -lt "$QUIET_SETTLE_DEADLINE" ]; do
+quiet_settle() { # <max-sleeps-per-window>
+  local deadline=$((SECONDS + 30))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    : > "$QUIET_EXEC_LOG"
+    sleep 1.5
+    [ "$(grep -cx sleep "$QUIET_EXEC_LOG" || true)" -gt "$1" ] || break
+  done
   : > "$QUIET_EXEC_LOG"
-  sleep 1.5
-  grep -qx sleep "$QUIET_EXEC_LOG" || break
-done
-: > "$QUIET_EXEC_LOG"
-sleep 4
-QUIET_EXECS=$(wc -l < "$QUIET_EXEC_LOG" | tr -d ' ')
-QUIET_SLEEPS=$(grep -cx sleep "$QUIET_EXEC_LOG" || true)
-[ "$QUIET_SLEEPS" -le 2 ] \
-  || fail "an idle worker kept polling with sleep ($QUIET_SLEEPS sleeps in 4s)"
-[ "$QUIET_EXECS" -le 80 ] \
-  || fail "an idle worker ran $QUIET_EXECS commands in 4s; expected only heartbeats and sweeps"$'\n'"$(sort "$QUIET_EXEC_LOG" | uniq -c)"
+}
+quiet_measure() { # <label> <max-sleeps>
+  local execs sleeps
+  sleep 4
+  execs=$(wc -l < "$QUIET_EXEC_LOG" | tr -d ' ')
+  sleeps=$(grep -cx sleep "$QUIET_EXEC_LOG" || true)
+  [ "$sleeps" -le "$2" ] \
+    || fail "$1 kept polling with sleep ($sleeps sleeps in 4s)"
+  [ "$execs" -le 80 ] \
+    || fail "$1 ran $execs commands in 4s; expected only heartbeats and sweeps"$'\n'"$(sort "$QUIET_EXEC_LOG" | uniq -c)"
+}
+# fm_remote_job_probe must keep reading an idle worker as ready: its heartbeat
+# stays far inside the probe's 10-second bound across several idle waits.
+quiet_heartbeat_stays_fresh() { # <state> <account-home> <label>
+  local deadline=$((SECONDS + 5)) mtime age
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    ( FM_REMOTE_JOB_STATE_ROOT="$1"; fm_remote_job_probe "$2" ) \
+      || fail "the probe read the live $3 worker as unready"
+    mtime=$(fm_remote_job_path_mtime "$1/worker.ready") || fail "the $3 worker heartbeat vanished"
+    age=$(( $(date +%s) - mtime ))
+    [ "$age" -le 3 ] || fail "the $3 worker heartbeat went ${age}s stale"
+    sleep 0.5
+  done
+}
+quiet_stage_completes() { # <state> <account-home> <touched> <label>
+  local began=$SECONDS elapsed
+  (
+    FM_REMOTE_JOB_STATE_ROOT="$1"
+    FM_REMOTE_JOB_QUEUE_TIMEOUT=60
+    FM_REMOTE_JOB_TIMEOUT=30
+    fm_remote_job_stage "$2" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$3" \
+      < /dev/null > /dev/null || exit 1
+    fm_remote_job_wait "$2" "$FM_REMOTE_JOB_ID" || exit 1
+    [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || exit 1
+    fm_remote_job_reap "$2" "$FM_REMOTE_JOB_ID"
+  ) || fail "a job staged to the $4 worker did not complete"
+  elapsed=$((SECONDS - began))
+  assert_present "$3" "the job staged to the $4 worker did not run"
+  [ "$elapsed" -lt 15 ] \
+    || fail "a job staged to the $4 worker waited ${elapsed}s"
+}
+quiet_stop() { # <pid>
+  kill -TERM "$1"
+  for _ in $(seq 1 100); do
+    kill -0 "$1" 2>/dev/null || break
+    sleep 0.05
+  done
+  kill -0 "$1" 2>/dev/null && fail "TERM did not stop the idle worker"
+  wait "$1" 2>/dev/null || true
+}
+quiet_wait_ready "$QUIET_STATE" idle-rate
+quiet_settle 0
+quiet_measure "an idle worker" 0
 pass "an idle worker blocks between passes instead of busy-polling"
 
-# Staging nudges the blocked worker, so new work is claimed and published long
-# before the 30-second idle bound would have found it.
-QUIET_BEGAN=$SECONDS
-(
-  FM_REMOTE_JOB_STATE_ROOT="$QUIET_STATE"
-  FM_REMOTE_JOB_QUEUE_TIMEOUT=60
-  FM_REMOTE_JOB_TIMEOUT=30
-  fm_remote_job_stage "$QUIET_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$QUIET_TOUCHED" \
-    < /dev/null > /dev/null || exit 1
-  fm_remote_job_wait "$QUIET_HOME" "$FM_REMOTE_JOB_ID" || exit 1
-  [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || exit 1
-  fm_remote_job_reap "$QUIET_HOME" "$FM_REMOTE_JOB_ID"
-) || fail "a job staged to an idle worker did not complete"
-QUIET_ELAPSED=$((SECONDS - QUIET_BEGAN))
-assert_present "$QUIET_TOUCHED" "the nudged job did not run"
-[ "$QUIET_ELAPSED" -lt 15 ] \
-  || fail "a job staged to an idle worker waited ${QUIET_ELAPSED}s, as if no nudge reached the worker"
+quiet_heartbeat_stays_fresh "$QUIET_STATE" "$QUIET_HOME" idle
+pass "an idle worker keeps its readiness heartbeat fresh while blocked"
+
+# Staging nudges the blocked worker, so new work is claimed and published
+# promptly.
+quiet_stage_completes "$QUIET_STATE" "$QUIET_HOME" "$QUIET_TOUCHED" idle
 pass "staging wakes an idle worker to claim and publish the job promptly"
 
 # Hoisting setup out of every pass must not drop the worker's own repair of the
@@ -1132,15 +1170,35 @@ for QUIET_DIR in jobs .seq-claims logs; do
   [ "$(file_mode "$QUIET_STATE/$QUIET_DIR")" = 700 ] \
     || fail "the idle worker did not restore 0700 on its $QUIET_DIR directory"
 done
-kill -TERM "$QUIET_WORKER_PID"
-for _ in $(seq 1 100); do
-  kill -0 "$QUIET_WORKER_PID" 2>/dev/null || break
-  sleep 0.05
-done
-kill -0 "$QUIET_WORKER_PID" 2>/dev/null && fail "TERM did not stop a worker blocked on its wake FIFO"
-wait "$QUIET_WORKER_PID" 2>/dev/null || true
+quiet_stop "$QUIET_WORKER_PID"
 QUIET_WORKER_PID=
 pass "an idle worker still repairs queue permissions and stops promptly on TERM"
+
+# A worker that cannot open its wake FIFO - here a directory squats on the
+# path - sleeps out the idle bound between passes instead of falling back to
+# the 50 ms poll, while staying ready and still claiming new work.
+QUIET_NOFIFO_HOME="$TMP_ROOT/quiet-nofifo-account"
+QUIET_NOFIFO_STATE="$TMP_ROOT/quiet-nofifo-state"
+mkdir -p "$QUIET_NOFIFO_HOME"
+mkdir -m 700 "$QUIET_NOFIFO_STATE"
+mkdir "$QUIET_NOFIFO_STATE/worker.wake"
+touch "$QUIET_NOFIFO_STATE/worker.wake/keep"
+HOME="$QUIET_NOFIFO_HOME" PATH="$QUIET_SHIM:/usr/bin:/bin:/usr/sbin:/sbin" FM_TEST_EXEC_LOG="$QUIET_EXEC_LOG" \
+  FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$QUIET_NOFIFO_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/quiet-nofifo.out" 2> "$TMP_ROOT/quiet-nofifo.err" &
+QUIET_WORKER_PID=$!
+quiet_wait_ready "$QUIET_NOFIFO_STATE" FIFO-less
+grep -q 'cannot open the worker wake FIFO' "$TMP_ROOT/quiet-nofifo.err" \
+  || fail "the FIFO-less worker did not report its missing wake FIFO"
+quiet_settle 3
+quiet_measure "a FIFO-less idle worker" 6
+pass "a worker without its wake FIFO sleeps out the idle bound instead of busy-polling"
+quiet_heartbeat_stays_fresh "$QUIET_NOFIFO_STATE" "$QUIET_NOFIFO_HOME" FIFO-less
+quiet_stage_completes "$QUIET_NOFIFO_STATE" "$QUIET_NOFIFO_HOME" "$TMP_ROOT/quiet-nofifo-touched" FIFO-less
+quiet_stop "$QUIET_WORKER_PID"
+QUIET_WORKER_PID=
+pass "a worker without its wake FIFO stays ready and still claims staged work"
 
 # A child that stays up for FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS clears the
 # consecutive-failure backoff, so a child that dies just past that threshold

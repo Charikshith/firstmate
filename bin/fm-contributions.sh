@@ -106,8 +106,18 @@ jq_lib() { # jq options/program via final argument
   jq -L "$SCRIPT_DIR" "$@" "include \"fm-contributions\"; $program"
 }
 
+# Loaded on first use, so a snapshot of a home with no records never pays for
+# the wake library's source-time state initialization.
+load_wake_lib() {
+  command -v fm_lock_acquire_wait >/dev/null 2>&1 && return 0
+  FM_WAKE_QUEUE="$STATE/.wake-queue"
+  FM_WAKE_QUEUE_LOCK="$STATE/.wake-queue.lock"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+}
+
 read_saved() {
-  local file
+  local file dir task
   : > "$TMP/saved.jsonl"
   ERRORS=0
   if [ -L "$DATA" ]; then
@@ -115,14 +125,17 @@ read_saved() {
   fi
   for file in "$DATA"/*/contributions.json; do
     [ -e "$file" ] || [ -L "$file" ] || continue
-    if [ -L "$file" ] || [ -L "$(dirname "$file")" ] || [ ! -f "$file" ] \
+    load_wake_lib
+    fm_dirname_to dir "$file"
+    fm_basename_to task "$dir"
+    if [ -L "$file" ] || [ -L "$dir" ] || [ ! -f "$file" ] \
       || [ "$(wc -c < "$file")" -gt 1048576 ] \
       || ! jq_lib -ne --slurpfile record "$file" '($record | length) == 1 and ($record[0] | valid_record)' >/dev/null 2>&1; then
       ERRORS=$((ERRORS + 1))
       continue
     fi
     # A file's task identity must match its durable directory, not arbitrary JSON.
-    if ! jq -e --arg task "$(basename "$(dirname "$file")")" '.task == $task' "$file" >/dev/null; then
+    if ! jq -e --arg task "$task" '.task == $task' "$file" >/dev/null; then
       ERRORS=$((ERRORS + 1)); continue
     fi
     jq -c . "$file" >> "$TMP/saved.jsonl"
@@ -150,11 +163,7 @@ project() {
 acquire() {
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || fail 'state directory unavailable'
   [ -d "$DATA" ] && [ ! -L "$DATA" ] || fail 'data directory unavailable'
-  # Keep the wake library's source-time state initialization off read-only paths.
-  FM_WAKE_QUEUE="$STATE/.wake-queue"
-  FM_WAKE_QUEUE_LOCK="$STATE/.wake-queue.lock"
-  # shellcheck source=bin/fm-wake-lib.sh
-  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  load_wake_lib
   fm_lock_acquire_wait "$STATE/.contributions.lock" || fail 'observation lock unavailable'
   LOCK_HELD=1
 }

@@ -24,14 +24,15 @@
 #
 # The serving loop does not busy-poll an idle queue. After any activity - a
 # wake nudge, a lane started, or a lane reaped - it rescans every
-# FM_REMOTE_JOB_POLL_SECONDS for FM_REMOTE_JOB_FAST_PASSES passes, then blocks
-# on its worker.wake FIFO for up to FM_REMOTE_JOB_IDLE_WAIT_SECONDS without
-# forking. The library's nudge on staging, cancellation, and lane exit ends
-# that wait at once; the bound alone still finds a lane that died without
-# nudging, an orphaned claim, and an expired queue deadline. The readiness
-# heartbeat is refreshed at most once per second, and the stale sweep, whose
-# state preparation also re-applies the queue directories' 0700 modes, runs at
-# startup and then at most every FM_REMOTE_JOB_SWEEP_SECONDS, never more
+# FM_REMOTE_JOB_POLL_SECONDS for 20 passes, then blocks on its worker.wake FIFO
+# for up to one second without forking. The library's nudge on staging,
+# cancellation, and lane exit ends that wait at once; the bound alone still
+# finds a lane that died without nudging, an orphaned claim, and an expired
+# queue deadline. Without a usable FIFO the loop sleeps that same second
+# between idle passes instead. Either way the readiness heartbeat is refreshed
+# about once per second, far inside the probe's 10-second freshness bound. The
+# stale sweep, whose state preparation also re-applies the queue directories'
+# 0700 modes, runs at startup and then at most every 60 seconds, never more
 # rarely than the shortest record reap age.
 #
 # The worker is abandoned when its configured FM_ROOT stops being a genuine
@@ -62,11 +63,10 @@ FM_REMOTE_JOB_ORPHAN_GRACE_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_ORP
 FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS=$(worker_bounded_setting "${FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS:-}" 20)
 FM_REMOTE_JOB_SUPERVISOR_MAX_BACKOFF_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_SUPERVISOR_MAX_BACKOFF_SECONDS:-}" 5)
 FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS:-}" 10)
-FM_REMOTE_JOB_FAST_PASSES=$(worker_bounded_setting "${FM_REMOTE_JOB_FAST_PASSES:-}" 20)
-FM_REMOTE_JOB_SWEEP_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_SWEEP_SECONDS:-}" 60)
-FM_REMOTE_JOB_IDLE_WAIT_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_IDLE_WAIT_SECONDS:-}" 1)
-# bash 3.2 read -t takes whole seconds, and zero would never block.
-[ "$FM_REMOTE_JOB_IDLE_WAIT_SECONDS" -ge 1 ] || FM_REMOTE_JOB_IDLE_WAIT_SECONDS=1
+WORKER_FAST_PASSES=20
+# bash 3.2 read -t takes whole seconds; one keeps the heartbeat fresh.
+WORKER_IDLE_WAIT_SECONDS=1
+WORKER_SWEEP_SECONDS=60
 
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}
@@ -1124,7 +1124,7 @@ worker_process_once() { # <account-home>
 # Open this worker's wake FIFO read-write on fd 8, replacing anything else at
 # its path. Holding both ends means the idle read never sees end-of-file and a
 # nudge written while this worker is busy waits in the pipe. Without the FIFO
-# the loop falls back to plain polling.
+# the loop falls back to sleeping out the idle bound.
 worker_open_wake() {
   local wake
   wake=$(fm_remote_job_worker_wake_path)
@@ -1141,23 +1141,27 @@ worker_open_wake() {
 
 # Wait for the next pass: poll quickly for a short window after activity so a
 # lane that nudged just before exiting is reaped and its home's next job
-# starts, otherwise block on the wake FIFO up to the idle bound. A read that
-# returns early without a byte and without a second elapsing cannot be the
-# timeout, so the descriptor is unusable and the loop falls back to polling
-# rather than spinning.
+# starts, otherwise block on the wake FIFO up to the idle bound, or sleep it
+# out when there is no FIFO. A read that returns early without a byte and
+# without a second elapsing cannot be the timeout, so the descriptor is
+# unusable and the loop falls back to sleeping rather than spinning.
 worker_wait_for_work() {
   local started byte
   if [ "$WORKER_ACTIVITY" -eq 1 ]; then
-    WORKER_FAST_REMAINING=$FM_REMOTE_JOB_FAST_PASSES
+    WORKER_FAST_REMAINING=$WORKER_FAST_PASSES
     WORKER_ACTIVITY=0
   fi
-  if [ "$WORKER_FAST_REMAINING" -gt 0 ] || [ "$WORKER_WAKE_OPEN" -ne 1 ]; then
-    [ "$WORKER_FAST_REMAINING" -le 0 ] || WORKER_FAST_REMAINING=$((WORKER_FAST_REMAINING - 1))
+  if [ "$WORKER_FAST_REMAINING" -gt 0 ]; then
+    WORKER_FAST_REMAINING=$((WORKER_FAST_REMAINING - 1))
     sleep "$FM_REMOTE_JOB_POLL_SECONDS"
     return 0
   fi
+  if [ "$WORKER_WAKE_OPEN" -ne 1 ]; then
+    sleep "$WORKER_IDLE_WAIT_SECONDS"
+    return 0
+  fi
   started=$SECONDS
-  if IFS= read -r -t "$FM_REMOTE_JOB_IDLE_WAIT_SECONDS" -n 1 byte <&8; then
+  if IFS= read -r -t "$WORKER_IDLE_WAIT_SECONDS" -n 1 byte <&8; then
     : "$byte"
     WORKER_ACTIVITY=1
     return 0
@@ -1188,8 +1192,8 @@ main() {
   trap worker_shutdown HUP INT TERM
   worker_publish_identity "$account_home" || { worker_error "cannot publish worker code identity"; exit 1; }
   worker_publish_pid || { worker_error "cannot publish worker pid"; exit 1; }
-  worker_open_wake || worker_error "cannot open the worker wake FIFO; polling instead"
-  sweep_interval=$FM_REMOTE_JOB_SWEEP_SECONDS
+  worker_open_wake || worker_error "cannot open the worker wake FIFO; sleeping between idle passes instead"
+  sweep_interval=$WORKER_SWEEP_SECONDS
   [ "$FM_REMOTE_JOB_STAGE_REAP_SECONDS" -ge "$sweep_interval" ] || sweep_interval=$FM_REMOTE_JOB_STAGE_REAP_SECONDS
   [ "$FM_REMOTE_JOB_REAP_SECONDS" -ge "$sweep_interval" ] || sweep_interval=$FM_REMOTE_JOB_REAP_SECONDS
   [ "$sweep_interval" -ge 1 ] || sweep_interval=1
