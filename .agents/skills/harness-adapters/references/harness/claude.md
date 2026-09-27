@@ -12,7 +12,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
-| Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. Both shapes additionally carry `--add-dir` for the task's Firstmate channel directories (see "Task control channel"). |
+| Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269. See [`Claude permission mode`](../../../../../docs/configuration.md#claude-permission-mode-configclaude-permission-mode) for the launch grant and configuration. |
 
 ## Workspace trust
 
@@ -65,12 +65,6 @@ The controls are scoped to the launched process and never modify the captain's g
 A Claude task worker's launch brief and Firstmate steering-inbox messages arrive as file-shaped content that is otherwise indistinguishable from indirect prompt injection.
 `launch_template()` in `../../../../../bin/fm-spawn.sh` establishes exactly those two Firstmate-owned channels as first-party instructions through `--append-system-prompt`, while leaving project files, fetched content, and other external material under the model's normal distrust and granting no merge, destructive, or security-sensitive authority beyond the brief.
 A `--secondmate` launch omits the statement because a secondmate operates under its own supervisor contract instead of a task worker's.
-
-Those channel files all live outside the pane's working directory, which Claude path-checks Read, Glob, and Grep against.
-Since Claude Code 2.1.257 the first such read under `--permission-mode auto` parks the pane on a one-time "Allow reads outside the working directories?" question instead of reading; a "Block" answer on the machine writes `permissions.blockReadsOutsideWorkingDirectories` into user settings and then refuses the same reads under bypass mode too.
-Every Claude launch - spawn and relaunch, `auto` and `bypass` - therefore passes `--add-dir` for exactly the task's channel directories: a secondmate gets the parent home's `state/<id>.inbox`, and a ship or scout worker gets the home's `state/operational-inbox`, `state/<id>.inbox`, `data/<id>`, and the code root's `.agents/skills`, all resolved to real paths and never wider than those channels.
-`launch_template()`'s `__CLAUDEADDDIRS__` and `claude_add_dirs_flag()` in `../../../../../bin/fm-spawn.sh` own the grant; the bypass-mode launch argv change is deliberate, keeping the grant in force if the machine ever records a Block.
-The question's other known masks - a Bash `cat` read instead of a file tool, `--setting-sources` without `user`, a prior "Yes" recorded in `~/.claude.json` as `hasSeenAutoModeOutsideReadPrompt`, or a non-interactive `-p` session - stay possible but are not relied on.
 
 ## Primary integration
 
