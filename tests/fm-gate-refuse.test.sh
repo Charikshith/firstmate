@@ -201,10 +201,13 @@ test_lab_home_private_tmux_socket_survives_deep_paths() {
   ready="$lab/state/primary-started"
   [ "${#lab}" -gt 120 ] || fail "lab path was not deliberately long enough"
   [ "${#socket_path}" -lt 60 ] || fail "tmux socket path is not short: $socket_path"
-  [ "$(stat -f '%Lp' "$socket_dir" 2>/dev/null || stat -c '%a' "$socket_dir")" = 700 ] \
-    || fail "private tmux directory mode is not 0700"
-  [ "$(stat -f '%u' "$socket_dir" 2>/dev/null || stat -c '%u' "$socket_dir")" = "$(id -u)" ] \
-    || fail "private tmux directory is not owned by the current user"
+  local mode owner
+  case "$(uname -s)" in
+    Darwin) mode=$(stat -f '%Lp' "$socket_dir"); owner=$(stat -f '%u' "$socket_dir") ;;
+    *) mode=$(stat -c '%a' "$socket_dir"); owner=$(stat -c '%u' "$socket_dir") ;;
+  esac
+  [ "$mode" = 700 ] || fail "private tmux directory mode is not 0700"
+  [ "$owner" = "$(id -u)" ] || fail "private tmux directory is not owned by the current user"
   [ "${socket_dir#/tmp/fml.}" != "$socket_dir" ] || fail "socket directory is not under the short /tmp/fml prefix"
 
   cleanup_deep_lab() {
@@ -229,6 +232,13 @@ test_lab_home_private_tmux_socket_survives_deep_paths() {
   [ -d "$socket_dir" ] || fail "refused active-server teardown removed the socket directory"
   env TMUX_TMPDIR="$socket_dir" "$real_tmux" kill-server \
     || fail "could not stop the isolated lab tmux server"
+  mkdir -p "$TMP/failing-tmux-bin"
+  printf '#!/bin/sh\necho "tmux: probe failed" >&2\nexit 1\n' > "$TMP/failing-tmux-bin/tmux"
+  chmod +x "$TMP/failing-tmux-bin/tmux"
+  if PATH="$TMP/failing-tmux-bin:$PATH" "$LABHOME" teardown "$lab" >/dev/null 2>&1; then
+    fail "lab teardown removed the directory when its tmux probe failed"
+  fi
+  [ -d "$socket_dir" ] || fail "failed-probe teardown removed the socket directory"
   "$LABHOME" teardown "$lab" || fail "lab tmux directory teardown failed"
   [ ! -e "$socket_dir" ] || fail "lab teardown left the private tmux directory behind"
   trap fm_test_cleanup EXIT

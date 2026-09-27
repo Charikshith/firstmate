@@ -88,9 +88,13 @@ case "${1:-}" in
       || { fm_lab_home_error "recorded tmux directory is missing or unsafe"; exit 1; }
     [ "$(fm_lab_home_mode "$socket_dir")" = 700 ] && [ "$(fm_lab_home_owner "$socket_dir")" = "$(id -u)" ] \
       || { fm_lab_home_error "refusing to remove a non-private or non-user-owned tmux directory"; exit 1; }
-    if tmux -S "$socket_dir/tmux-$(id -u)/default" list-sessions >/dev/null 2>&1; then
-      fm_lab_home_error "refusing teardown while the lab tmux server is still running"
-      exit 1
+    socket="$socket_dir/tmux-$(id -u)/default"
+    if [ -e "$socket" ] || [ -L "$socket" ]; then
+      if probe=$(tmux -S "$socket" list-sessions 2>&1 >/dev/null) \
+        || [ "${probe#*no server running}" = "$probe" ]; then
+        fm_lab_home_error "refusing teardown: cannot confirm the lab tmux server has stopped"
+        exit 1
+      fi
     fi
     rm -rf "$socket_dir" && rm -f "$record"
     ;;
