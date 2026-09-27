@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared durable wake queue and portable lock helpers.
 
-FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_WAKE_LIB_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -44,6 +44,49 @@ fm_current_pid() {  # [output-variable]
     printf '%s\n' "$fm_pid"
   fi
 }
+
+# Fork-free stand-ins for helpers the watcher, drain, and lock paths run every
+# cycle. Each assigns <output-variable> exactly what `$(dirname -- <path>)`,
+# `$(basename -- <path>)`, or `$(date +%s)` would: POSIX component rules, and
+# the command substitution's removal of trailing newlines.
+fm_dirname_to() {  # <output-variable> <path>
+  local fm_path=$2
+  case "$fm_path" in
+    '') fm_path=. ;;
+    *[!/]*)
+      fm_path=${fm_path%"${fm_path##*[!/]}"}
+      case "$fm_path" in
+        */*)
+          fm_path=${fm_path%/*}
+          fm_path=${fm_path%"${fm_path##*[!/]}"}
+          [ -n "$fm_path" ] || fm_path=/
+          ;;
+        *) fm_path=. ;;
+      esac
+      ;;
+    *) fm_path=/ ;;
+  esac
+  while [ "${fm_path%$'\n'}" != "$fm_path" ]; do fm_path=${fm_path%$'\n'}; done
+  printf -v "$1" '%s' "$fm_path"
+}
+
+fm_basename_to() {  # <output-variable> <path>
+  local fm_path=$2
+  case "$fm_path" in
+    '') ;;
+    *[!/]*) fm_path=${fm_path%"${fm_path##*[!/]}"}; fm_path=${fm_path##*/} ;;
+    *) fm_path=/ ;;
+  esac
+  while [ "${fm_path%$'\n'}" != "$fm_path" ]; do fm_path=${fm_path%$'\n'}; done
+  printf -v "$1" '%s' "$fm_path"
+}
+
+# printf's %(...)T is a bash 4.2 builtin; stock macOS Bash 3.2 still forks date.
+if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 2 ]; }; then
+  fm_epoch_seconds_to() { printf -v "$1" '%(%s)T' -1; }
+else
+  fm_epoch_seconds_to() { printf -v "$1" '%s' "$(date +%s)"; }
+fi
 
 fm_pid_alive() {
   local pid=$1
@@ -104,9 +147,10 @@ fm_path_mtime() {
 }
 
 fm_path_age() {
-  local path=$1 m
+  local path=$1 m now
   m=$(fm_path_mtime "$path") || { echo 999999; return; }
-  echo $(( $(date +%s) - m ))
+  fm_epoch_seconds_to now
+  echo $(( now - m ))
 }
 
 # fm_poll_derived_grace [poll-seconds]
@@ -469,8 +513,8 @@ fm_lock_role() {
 
 fm_lock_abs_path() {
   local path=$1 dir base
-  dir=$(dirname "$path")
-  base=$(basename "$path")
+  fm_dirname_to dir "$path"
+  fm_basename_to base "$path"
   dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
   printf '%s/%s\n' "$dir" "$base"
 }
@@ -633,12 +677,11 @@ FM_RECOVERY_MARKER_ACTION='none'
 # docs/watcher-continuity.md owns the recovery-episode contract, including the
 # once-per-generation announcement rule for unacknowledged downtime.
 fm_recovery_marker_read() {
-  local marker=$1 line count
+  local marker=$1 line extra
   FM_RECOVERY_MARKER_TOKEN=
   [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
-  count=$(wc -l < "$marker" 2>/dev/null | tr -d '[:space:]') || return 1
-  [ "$count" = 1 ] || return 1
-  IFS= read -r line < "$marker" || return 1
+  # Exactly one newline byte: the first line is terminated and no second is.
+  { IFS= read -r line && ! IFS= read -r extra; } < "$marker" || return 1
   case "$line" in
     pending:handling:*|pending:downtime:*|announced:handling:*|announced:downtime:*|acked:handling:*|acked:downtime:*) ;;
     *) return 1 ;;
@@ -2254,13 +2297,8 @@ fm_wake_signal_sig() {  # <file> -> reported-state signature
 
 fm_wake_signal_seen_path() {  # <state> <file>
   local task
-  case "$2" in
-    *.status)
-      task=$(basename "$2"); task=${task%.status}
-      printf '%s/.seen-%s' "$1" "$(printf '%s.status' "$task" | tr '.' '_')"
-      ;;
-    *) printf '%s/.seen-%s' "$1" "$(basename "$2" | tr '.' '_')" ;;
-  esac
+  fm_basename_to task "$2"
+  printf '%s/.seen-%s' "$1" "${task//./_}"
 }
 
 # The byte size recorded in <file>'s seen marker, or 0 when no marker exists, it
