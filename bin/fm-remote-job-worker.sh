@@ -22,6 +22,18 @@
 # its recorded command group, leaving interrupted records for the replacement
 # worker's orphan recovery.
 #
+# The serving loop does not busy-poll an idle queue. After any activity - a
+# wake nudge, a lane started, or a lane reaped - it rescans every
+# FM_REMOTE_JOB_POLL_SECONDS for FM_REMOTE_JOB_FAST_PASSES passes, then blocks
+# on its worker.wake FIFO for up to FM_REMOTE_JOB_IDLE_WAIT_SECONDS without
+# forking. The library's nudge on staging, cancellation, and lane exit ends
+# that wait at once; the bound alone still finds a lane that died without
+# nudging, an orphaned claim, and an expired queue deadline. The readiness
+# heartbeat is refreshed at most once per second, and the stale sweep, whose
+# state preparation also re-applies the queue directories' 0700 modes, runs at
+# startup and then at most every FM_REMOTE_JOB_SWEEP_SECONDS, never more
+# rarely than the shortest record reap age.
+#
 # The worker is abandoned when its configured FM_ROOT stops being a genuine
 # Firstmate checkout - the state a pruned no-mistakes gate worktree, a returned
 # pooled worktree, or a removed test fixture root leaves behind. It can never
@@ -50,6 +62,11 @@ FM_REMOTE_JOB_ORPHAN_GRACE_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_ORP
 FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS=$(worker_bounded_setting "${FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS:-}" 20)
 FM_REMOTE_JOB_SUPERVISOR_MAX_BACKOFF_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_SUPERVISOR_MAX_BACKOFF_SECONDS:-}" 5)
 FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS:-}" 10)
+FM_REMOTE_JOB_FAST_PASSES=$(worker_bounded_setting "${FM_REMOTE_JOB_FAST_PASSES:-}" 20)
+FM_REMOTE_JOB_SWEEP_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_SWEEP_SECONDS:-}" 60)
+FM_REMOTE_JOB_IDLE_WAIT_SECONDS=$(worker_bounded_setting "${FM_REMOTE_JOB_IDLE_WAIT_SECONDS:-}" 1)
+# bash 3.2 read -t takes whole seconds, and zero would never block.
+[ "$FM_REMOTE_JOB_IDLE_WAIT_SECONDS" -ge 1 ] || FM_REMOTE_JOB_IDLE_WAIT_SECONDS=1
 
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 FM_ROOT=${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}
@@ -69,6 +86,8 @@ WORKER_LANE_HOMES=()
 WORKER_LANE_PIDS=()
 WORKER_LANE_STARTS=()
 WORKER_LANE_JOBS=()
+WORKER_WAKE_OPEN=0
+WORKER_ACTIVITY=0
 
 worker_error() { printf 'remote-job-worker: %s\n' "$1" >&2; }
 
@@ -917,6 +936,7 @@ worker_reap_finished_lanes() {
       live_jobs+=("${WORKER_LANE_JOBS[$i]}")
     else
       wait "$pid" 2>/dev/null || true
+      WORKER_ACTIVITY=1
     fi
     i=$((i + 1))
   done
@@ -1008,8 +1028,9 @@ worker_lane_execute() { # <account-home> <job-dir>
 # has always run in.
 worker_start_lane() { # <job-dir> <home>
   local job=$1 home=$2 lane_pid lane_start
-  "$SCRIPT_DIR/fm-remote-job-worker.sh" --lane "${job##*/}" &
+  "$SCRIPT_DIR/fm-remote-job-worker.sh" --lane "${job##*/}" 8<&- &
   lane_pid=$!
+  WORKER_ACTIVITY=1
   lane_start=$(fm_remote_job_process_start "$lane_pid" 2>/dev/null || true)
   WORKER_LANE_HOMES+=("$home")
   WORKER_LANE_PIDS+=("$lane_pid")
@@ -1023,8 +1044,9 @@ worker_lane_main() { # <job-id>
   account_home=$(worker_account_home) || { worker_error "cannot resolve account home"; exit 1; }
   FM_ROOT=$(fm_remote_job_canonical_existing_dir "$FM_ROOT") || { worker_error "configured FM_ROOT is unsafe"; exit 1; }
   fm_remote_job_prepare_state "$account_home" || { worker_error "$FM_REMOTE_JOB_ERROR"; exit 1; }
-  job=$(fm_remote_job_job_dir "$1" 2>/dev/null) || exit 0
+  job=$(fm_remote_job_job_dir "$1" 2>/dev/null) || { fm_remote_job_wake_worker; exit 0; }
   worker_lane_execute "$account_home" "$job"
+  fm_remote_job_wake_worker
 }
 
 worker_process_once() { # <account-home>
@@ -1036,6 +1058,9 @@ worker_process_once() { # <account-home>
     [ -d "$job" ] && [ ! -L "$job" ] || continue
     id=${job##*/}
     fm_remote_job_safe_id "$id" || continue
+    # A live lane owns this record whatever its state, and every state below
+    # skips a lane-owned job, so do not re-read it on every pass.
+    worker_lane_owns_job "$FM_REMOTE_JOB_JOBS/$id" && continue
     job=$(fm_remote_job_job_dir "$id" 2>/dev/null || true)
     [ -n "$job" ] || continue
     state=$(fm_remote_job_read_state "$job" 2>/dev/null || true)
@@ -1096,8 +1121,56 @@ worker_process_once() { # <account-home>
   done < <(printf '%s' "$candidates" | sort -t $'\t' -k1,1n -k2,2)
 }
 
+# Open this worker's wake FIFO read-write on fd 8, replacing anything else at
+# its path. Holding both ends means the idle read never sees end-of-file and a
+# nudge written while this worker is busy waits in the pipe. Without the FIFO
+# the loop falls back to plain polling.
+worker_open_wake() {
+  local wake
+  wake=$(fm_remote_job_worker_wake_path)
+  if [ -L "$wake" ] || { [ -e "$wake" ] && [ ! -p "$wake" ]; }; then
+    rm -f -- "$wake" 2>/dev/null || return 1
+  fi
+  if [ ! -p "$wake" ]; then
+    (umask 077; mkfifo "$wake") 2>/dev/null || return 1
+  fi
+  [ -p "$wake" ] && [ ! -L "$wake" ] || return 1
+  exec 8<> "$wake" || return 1
+  WORKER_WAKE_OPEN=1
+}
+
+# Wait for the next pass: poll quickly for a short window after activity so a
+# lane that nudged just before exiting is reaped and its home's next job
+# starts, otherwise block on the wake FIFO up to the idle bound. A read that
+# returns early without a byte and without a second elapsing cannot be the
+# timeout, so the descriptor is unusable and the loop falls back to polling
+# rather than spinning.
+worker_wait_for_work() {
+  local started byte
+  if [ "$WORKER_ACTIVITY" -eq 1 ]; then
+    WORKER_FAST_REMAINING=$FM_REMOTE_JOB_FAST_PASSES
+    WORKER_ACTIVITY=0
+  fi
+  if [ "$WORKER_FAST_REMAINING" -gt 0 ] || [ "$WORKER_WAKE_OPEN" -ne 1 ]; then
+    [ "$WORKER_FAST_REMAINING" -le 0 ] || WORKER_FAST_REMAINING=$((WORKER_FAST_REMAINING - 1))
+    sleep "$FM_REMOTE_JOB_POLL_SECONDS"
+    return 0
+  fi
+  started=$SECONDS
+  if IFS= read -r -t "$FM_REMOTE_JOB_IDLE_WAIT_SECONDS" -n 1 byte <&8; then
+    : "$byte"
+    WORKER_ACTIVITY=1
+    return 0
+  fi
+  if [ "$SECONDS" -eq "$started" ]; then
+    exec 8<&- 2>/dev/null || true
+    WORKER_WAKE_OPEN=0
+  fi
+  return 0
+}
+
 main() {
-  local account_home lock_status
+  local account_home lock_status next_heartbeat=-1 next_sweep=0 sweep_interval
   account_home=$(worker_account_home) || { worker_error "cannot resolve account home"; exit 1; }
   FM_ROOT=$(fm_remote_job_canonical_existing_dir "$FM_ROOT") || { worker_error "configured FM_ROOT is unsafe"; exit 1; }
   [ -f "$FM_ROOT/AGENTS.md" ] && [ ! -L "$FM_ROOT/AGENTS.md" ] || { worker_error "FM_ROOT is not a Firstmate checkout"; exit 1; }
@@ -1115,21 +1188,31 @@ main() {
   trap worker_shutdown HUP INT TERM
   worker_publish_identity "$account_home" || { worker_error "cannot publish worker code identity"; exit 1; }
   worker_publish_pid || { worker_error "cannot publish worker pid"; exit 1; }
+  worker_open_wake || worker_error "cannot open the worker wake FIFO; polling instead"
+  sweep_interval=$FM_REMOTE_JOB_SWEEP_SECONDS
+  [ "$FM_REMOTE_JOB_STAGE_REAP_SECONDS" -ge "$sweep_interval" ] || sweep_interval=$FM_REMOTE_JOB_STAGE_REAP_SECONDS
+  [ "$FM_REMOTE_JOB_REAP_SECONDS" -ge "$sweep_interval" ] || sweep_interval=$FM_REMOTE_JOB_REAP_SECONDS
+  [ "$sweep_interval" -ge 1 ] || sweep_interval=1
+  WORKER_FAST_REMAINING=0
+  WORKER_ACTIVITY=1
   while :; do
-    worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
-    # Checked right after a fresh heartbeat, so the grace window cannot make a
-    # still-healthy worker read as unready to a concurrent probe.
+    if [ "$SECONDS" -ne "$next_heartbeat" ]; then
+      worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
+      next_heartbeat=$SECONDS
+    fi
+    # Checked right after a heartbeat no older than a second, so the grace
+    # window cannot make a still-healthy worker read as unready to a
+    # concurrent probe.
     if worker_code_root_abandoned; then
       worker_error "configured FM_ROOT $FM_ROOT no longer exists; stopping the abandoned worker"
       exit 0
     fi
-    worker_reap=0
-    if [ "$worker_reap" -eq 0 ]; then
+    if [ "$SECONDS" -ge "$next_sweep" ]; then
       fm_remote_job_reap_stale "$account_home" || true
-      worker_reap=1
+      next_sweep=$((SECONDS + sweep_interval))
     fi
     worker_process_once "$account_home"
-    sleep "$FM_REMOTE_JOB_POLL_SECONDS"
+    worker_wait_for_work
   done
 }
 

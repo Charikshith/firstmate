@@ -25,6 +25,7 @@ REPLACEMENT_OWNER_PID=
 STALL_WORKER_PID=
 STALL_REPLACEMENT_PID=
 STALL_JOB_GROUP=
+QUIET_WORKER_PID=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # worker.pid records the serving child, not its restart supervisor, so stopping
 # that pid alone leaves the supervisor to respawn - the leak
@@ -36,6 +37,7 @@ cleanup_remote_job_fixture() {
   [ -z "$RESTART_SUPERVISOR_PID" ] || kill -KILL "$RESTART_SUPERVISOR_PID" 2>/dev/null || true
   [ -z "$LOST_TERM_PID" ] || kill -KILL "$LOST_TERM_PID" 2>/dev/null || true
   [ -z "$REPLACEMENT_OWNER_PID" ] || kill -KILL "$REPLACEMENT_OWNER_PID" 2>/dev/null || true
+  [ -z "$QUIET_WORKER_PID" ] || kill -KILL "$QUIET_WORKER_PID" 2>/dev/null || true
   local stall_pid
   for stall_pid in "$STALL_WORKER_PID" "$STALL_REPLACEMENT_PID"; do
     [ -n "$stall_pid" ] || continue
@@ -1050,6 +1052,95 @@ wait "$STALL_REPLACEMENT_PID" 2>/dev/null || true
 STALL_REPLACEMENT_PID=
 STALL_JOB_GROUP=
 pass "an ousted worker in shutdown leaves the replacement quarantine untouched"
+
+# An idle worker must not busy-poll its queue: between passes it blocks on its
+# wake FIFO, so its only steady cost is the once-a-second heartbeat plus the
+# periodic sweep. Every external command the worker runs by name goes through
+# a counting shim, which makes the exec rate observable without privileges.
+QUIET_HOME="$TMP_ROOT/quiet-account"
+QUIET_STATE="$TMP_ROOT/quiet-state"
+QUIET_SHIM="$TMP_ROOT/quiet-shim"
+QUIET_EXEC_LOG="$TMP_ROOT/quiet-execs"
+QUIET_TOUCHED="$TMP_ROOT/quiet-touched"
+mkdir -p "$QUIET_HOME" "$QUIET_SHIM"
+for QUIET_TOOL in sleep chmod mktemp mv rm date stat uname dirname basename wc tr tail head ps sort cat mkdir rmdir mkfifo; do
+  QUIET_REAL=$(PATH=/usr/bin:/bin command -v "$QUIET_TOOL") || continue
+  cat > "$QUIET_SHIM/$QUIET_TOOL" <<SH
+#!/bin/sh
+printf '%s\n' $QUIET_TOOL >> "\$FM_TEST_EXEC_LOG"
+exec $QUIET_REAL "\$@"
+SH
+  chmod +x "$QUIET_SHIM/$QUIET_TOOL"
+done
+HOME="$QUIET_HOME" PATH="$QUIET_SHIM:/usr/bin:/bin:/usr/sbin:/sbin" FM_TEST_EXEC_LOG="$QUIET_EXEC_LOG" \
+  FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$QUIET_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_IDLE_WAIT_SECONDS=30 FM_REMOTE_JOB_SWEEP_SECONDS=2 \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/quiet-worker.out" 2> "$TMP_ROOT/quiet-worker.err" &
+QUIET_WORKER_PID=$!
+for _ in $(seq 1 200); do
+  [ -f "$QUIET_STATE/worker.ready" ] && break
+  sleep 0.05
+done
+assert_present "$QUIET_STATE/worker.ready" "the idle-rate worker did not become ready"
+# Startup counts as activity, so wait out its short fast-poll window (slowed by
+# the shims themselves) before measuring the idle steady state.
+QUIET_SETTLE_DEADLINE=$((SECONDS + 30))
+while [ "$SECONDS" -lt "$QUIET_SETTLE_DEADLINE" ]; do
+  : > "$QUIET_EXEC_LOG"
+  sleep 1.5
+  grep -qx sleep "$QUIET_EXEC_LOG" || break
+done
+: > "$QUIET_EXEC_LOG"
+sleep 4
+QUIET_EXECS=$(wc -l < "$QUIET_EXEC_LOG" | tr -d ' ')
+QUIET_SLEEPS=$(grep -cx sleep "$QUIET_EXEC_LOG" || true)
+[ "$QUIET_SLEEPS" -le 2 ] \
+  || fail "an idle worker kept polling with sleep ($QUIET_SLEEPS sleeps in 4s)"
+[ "$QUIET_EXECS" -le 80 ] \
+  || fail "an idle worker ran $QUIET_EXECS commands in 4s; expected only heartbeats and sweeps"$'\n'"$(sort "$QUIET_EXEC_LOG" | uniq -c)"
+pass "an idle worker blocks between passes instead of busy-polling"
+
+# Staging nudges the blocked worker, so new work is claimed and published long
+# before the 30-second idle bound would have found it.
+QUIET_BEGAN=$SECONDS
+(
+  FM_REMOTE_JOB_STATE_ROOT="$QUIET_STATE"
+  FM_REMOTE_JOB_QUEUE_TIMEOUT=60
+  FM_REMOTE_JOB_TIMEOUT=30
+  fm_remote_job_stage "$QUIET_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-touch-job.sh "$QUIET_TOUCHED" \
+    < /dev/null > /dev/null || exit 1
+  fm_remote_job_wait "$QUIET_HOME" "$FM_REMOTE_JOB_ID" || exit 1
+  [ "$FM_REMOTE_JOB_EXIT" -eq 0 ] || exit 1
+  fm_remote_job_reap "$QUIET_HOME" "$FM_REMOTE_JOB_ID"
+) || fail "a job staged to an idle worker did not complete"
+QUIET_ELAPSED=$((SECONDS - QUIET_BEGAN))
+assert_present "$QUIET_TOUCHED" "the nudged job did not run"
+[ "$QUIET_ELAPSED" -lt 15 ] \
+  || fail "a job staged to an idle worker waited ${QUIET_ELAPSED}s, as if no nudge reached the worker"
+pass "staging wakes an idle worker to claim and publish the job promptly"
+
+# Hoisting setup out of every pass must not drop the worker's own repair of the
+# queue directories' 0700 modes: the periodic sweep still re-applies them with
+# no staging to trigger it.
+chmod 755 "$QUIET_STATE/jobs" "$QUIET_STATE/.seq-claims" "$QUIET_STATE/logs"
+for _ in $(seq 1 100); do
+  [ "$(file_mode "$QUIET_STATE/jobs")" = 700 ] && [ "$(file_mode "$QUIET_STATE/.seq-claims")" = 700 ] \
+    && [ "$(file_mode "$QUIET_STATE/logs")" = 700 ] && break
+  sleep 0.1
+done
+for QUIET_DIR in jobs .seq-claims logs; do
+  [ "$(file_mode "$QUIET_STATE/$QUIET_DIR")" = 700 ] \
+    || fail "the idle worker did not restore 0700 on its $QUIET_DIR directory"
+done
+kill -TERM "$QUIET_WORKER_PID"
+for _ in $(seq 1 100); do
+  kill -0 "$QUIET_WORKER_PID" 2>/dev/null || break
+  sleep 0.05
+done
+kill -0 "$QUIET_WORKER_PID" 2>/dev/null && fail "TERM did not stop a worker blocked on its wake FIFO"
+wait "$QUIET_WORKER_PID" 2>/dev/null || true
+QUIET_WORKER_PID=
+pass "an idle worker still repairs queue permissions and stops promptly on TERM"
 
 # A child that stays up for FM_REMOTE_JOB_SUPERVISOR_HEALTHY_SECONDS clears the
 # consecutive-failure backoff, so a child that dies just past that threshold
