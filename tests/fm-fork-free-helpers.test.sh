@@ -18,6 +18,7 @@ test_interpreters() {
   local seen='' candidate version
   for candidate in "${BASH:-bash}" /bin/bash "$(command -v bash 2>/dev/null || true)"; do
     [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    # shellcheck disable=SC2016 # Expanded by the candidate interpreter.
     version=$("$candidate" -c 'printf "%s" "$BASH_VERSION"' 2>/dev/null) || continue
     case " $seen " in *" $version "*) continue ;; esac
     seen="$seen $version"
