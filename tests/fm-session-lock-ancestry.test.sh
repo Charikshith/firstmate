@@ -589,6 +589,50 @@ test_windows_unreadable_table_fails_closed() {
   pass "session-lock windows: an empty or unreadable process table fails closed"
 }
 
+# Windows cannot rename a process image, so a Node-hosted harness is node.exe
+# there and only its script path names it.
+test_windows_interpreter_hosted_harness_is_found_by_script_word() {
+  local dir table script got
+  dir="$TMP_ROOT/win-interpreter"
+  mkdir -p "$dir/state"
+  table="$dir/table"
+  write_node_table() {  # <script-args>
+    printf '%s\n' '10|30|500|C:\Program Files\Git\usr\bin\bash.exe|bash.exe' \
+      "30|40|300|C:\\Program Files\\nodejs\\node.exe|\"C:\\Program Files\\nodejs\\node.exe\" $1" \
+      '40|4|200|C:\Program Files\PowerShell\7\pwsh.exe|pwsh.exe' > "$table"
+  }
+  for script in \
+    'C:\Users\u\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js' \
+    'C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js'; do
+    write_node_table "$script"
+    got=$(win_eval "$table" 'fm_harness_ancestry_pid') || fail "windows: node-hosted harness $script was not found"
+    [ "$got" = 30 ] || fail "windows: node-hosted harness resolved '$got', expected node.exe pid 30"
+    printf '30\n' > "$dir/state/.lock"
+    win_eval "$table" "fm_session_lock_owned_by_self '$dir/state'" \
+      || fail "windows: node-hosted harness $script did not recognize its own lock"
+  done
+  for script in \
+    'C:\Users\u\AppData\Roaming\npm\node_modules\lavish-axi\dist\cli.mjs' \
+    'C:\work\api-client\index.js' \
+    'C:\work\pipeline\run.js' \
+    'C:\Users\u\firstmate\.pi\extensions\lib\fm-sessionstart-supervisor.mjs' \
+    'C:\work\tool.js fix the pi bug'; do
+    write_node_table "$script"
+    if win_eval "$table" 'fm_harness_ancestry_pid'; then
+      fail "windows: node running '$script' was treated as a harness"
+    fi
+  done
+  pass "session-lock windows: a node-hosted harness is found by an exact word of its script path"
+}
+
+# The word rule is Windows-only: a POSIX harness retitles its own process.
+test_posix_interpreter_script_word_is_not_a_harness() {
+  if lib_eval "$TMP_ROOT" "fm_harness_process_matches node 'node /usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js'"; then
+    fail "posix: node running a pi-coding-agent script was treated as a harness"
+  fi
+  pass "session-lock posix: a node script path word does not identify a harness"
+}
+
 # --- end-to-end layer: the real Stop auto-arm in real process trees ----------
 
 install_autoarm_scripts() {
@@ -1268,6 +1312,8 @@ test_windows_lock_inspect_reads_the_table
 test_windows_parent_must_provably_predate_its_child
 test_windows_harness_beyond_a_gap_never_owns_the_lock
 test_windows_unreadable_table_fails_closed
+test_windows_interpreter_hosted_harness_is_found_by_script_word
+test_posix_interpreter_script_word_is_not_a_harness
 # The real-process fixtures below stand in for a harness with an MSYS bash
 # (named claude, or handed CLAUDE_PID=$$) and assert POSIX pids; on a Windows
 # host identity is the Win32 pid of a native process, which the windows unit
