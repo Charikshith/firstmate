@@ -161,7 +161,14 @@ FM_WIN_TABLE_LOADED=0
 fm_win_table_load() {
   [ "$FM_WIN_TABLE_LOADED" -eq 1 ] && return 0
   local table pid ppid created exe cmd rows=0
-  local cache="${TMPDIR:-/tmp}/.fm-win-table.$$"
+  local cache_dir="${TMPDIR:-/tmp}" cache="${TMPDIR:-/tmp}/.fm-win-table.$$"
+  # Sweep stale caches before adding this one: each is a single short-lived
+  # script invocation's snapshot, so anything a couple of minutes old is a
+  # leftover from a process that already exited, never cleaned up after
+  # itself since no single caller here owns the others' lifetimes. Bounds
+  # growth without needing coordinated cleanup across every source of this
+  # shared library.
+  find "$cache_dir" -maxdepth 1 -name '.fm-win-table.*' -mmin +2 -delete 2>/dev/null || true
   if [ -s "$cache" ]; then
     table=$(cat "$cache" 2>/dev/null)
   else
