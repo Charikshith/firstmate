@@ -1,0 +1,9 @@
+== tests/fm-session-lock-ancestry.test.sh at target 3c72292 (Windows host) ==
+ok - session-lock windows: a native claude.exe session is found through the Win32 process table
+ok - session-lock windows: the trusted Claude session anchors on its Windows CLAUDE_PID
+ok - session-lock windows: lock inspection reads liveness from the Win32 table
+ok - session-lock windows: a parent that does not provably predate its child ends the walk
+ok - session-lock windows: ownership stops at the first non-harness gap
+ok - session-lock windows: an empty or unreadable process table fails closed
+ok - session-lock windows: a node-hosted harness is found by an exact word of its script path
+ok - session-lock posix: a node script path word does not identify a harness

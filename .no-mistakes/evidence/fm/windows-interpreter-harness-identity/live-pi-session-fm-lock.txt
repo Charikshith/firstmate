@@ -1,0 +1,12 @@
+[add-dir] extension module loaded
+[STT] Spawning: D:/Code/ENVS/pytorch/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py in C:\Users\Chakri\.pi\agent\extensions\voice\
+```
+anchor: 28336
+--- fm-lock.sh acquire ---
+lock acquired: harness pid 28336
+exit=0
+--- state/.lock ---
+28336
+--- fm-lock.sh status ---
+lock: held by live harness pid 28336
+```

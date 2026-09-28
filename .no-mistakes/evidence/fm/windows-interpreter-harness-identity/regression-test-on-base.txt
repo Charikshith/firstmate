@@ -1,0 +1,5 @@
+== tests/fm-session-lock-ancestry.test.sh with bin/fm-session-lock-lib.sh at base ff1175e ==
+ok - session-lock windows: a parent that does not provably predate its child ends the walk
+ok - session-lock windows: ownership stops at the first non-harness gap
+ok - session-lock windows: an empty or unreadable process table fails closed
+not ok - windows: node-hosted harness C:\Users\u\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js was not found

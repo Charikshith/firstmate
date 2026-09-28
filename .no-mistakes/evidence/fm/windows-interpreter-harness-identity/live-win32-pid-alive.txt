@@ -1,0 +1,37 @@
+== fm_harness_pid_alive over real Win32 node/claude processes ==
+-- BASE ff1175e --
+22068  not-harness        "C:\Users\Chakri\AppData\Roaming\uv\python\cpython-3.11.9-windows-x86_64-none\pythonw.exe" -m hermes_cli.main gateway run
+3476   not-harness        "C:\Program Files\nodejs\node.exe"  "C:\Users\Chakri\AppData\Roaming\npm\node_modules\9router\cli.js" --tray --skip-update
+10568  not-harness        "C:\Program Files\nodejs\node.exe" --max-old-space-size=6144 C:\Users\Chakri\AppData\Roaming\npm\node_modules\9router\app\custom-server.js
+26872  not-harness        "C:\Program Files\nodejs\node.exe" C:\Users\Chakri\AppData\Roaming\npm/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+12220  not-harness        D:/Code/ENVS/pytorch/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+26908  not-harness        "C:\Users\Chakri\AppData\Local\Programs\Python\Python312\python.exe" C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+9756   not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+22524  not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+26592  HARNESS(claude=1)  "C:\Users\Chakri\.local\bin\claude.exe" --resume 6e43dbc8-2ccb-4470-943a-1e1641392985
+28072  not-harness        "C:\Python314\python.exe"  "C:\Users\Chakri\AppData\Roaming\Python\Python314\Scripts\headroom.EXE" mcp serve
+22600  not-harness        "C:\Program Files\nodejs\node.exe" C:\Users\Chakri\AppData\Roaming\npm/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+23852  not-harness        D:/Code/ENVS/pytorch/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+1116   not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+17356  not-harness        "C:\Users\Chakri\AppData\Local\Programs\Python\Python312\python.exe" C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+26688  not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+24900  HARNESS(claude=1)  claude -p --verbose --output-format stream-json --setting-sources user --json-schema "{  \"type\": \"object\",  \"properties\": {   \"findin
+28848  not-harness        "C:\Python314\python.exe"  "C:\Users\Chakri\AppData\Roaming\Python\Python314\Scripts\headroom.EXE" mcp serve
+-- TARGET 3c72292 --
+22068  not-harness        "C:\Users\Chakri\AppData\Roaming\uv\python\cpython-3.11.9-windows-x86_64-none\pythonw.exe" -m hermes_cli.main gateway run
+3476   not-harness        "C:\Program Files\nodejs\node.exe"  "C:\Users\Chakri\AppData\Roaming\npm\node_modules\9router\cli.js" --tray --skip-update
+10568  not-harness        "C:\Program Files\nodejs\node.exe" --max-old-space-size=6144 C:\Users\Chakri\AppData\Roaming\npm\node_modules\9router\app\custom-server.js
+26872  HARNESS(claude=0)  "C:\Program Files\nodejs\node.exe" C:\Users\Chakri\AppData\Roaming\npm/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+12220  not-harness        D:/Code/ENVS/pytorch/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+26908  not-harness        "C:\Users\Chakri\AppData\Local\Programs\Python\Python312\python.exe" C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+9756   not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+22524  not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+26592  HARNESS(claude=1)  "C:\Users\Chakri\.local\bin\claude.exe" --resume 6e43dbc8-2ccb-4470-943a-1e1641392985
+28072  not-harness        "C:\Python314\python.exe"  "C:\Users\Chakri\AppData\Roaming\Python\Python314\Scripts\headroom.EXE" mcp serve
+22600  HARNESS(claude=0)  "C:\Program Files\nodejs\node.exe" C:\Users\Chakri\AppData\Roaming\npm/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+23852  not-harness        D:/Code/ENVS/pytorch/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+1116   not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+17356  not-harness        "C:\Users\Chakri\AppData\Local\Programs\Python\Python312\python.exe" C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py
+26688  not-harness        D:/Code/ENVS/v3.13/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\tts_server.py
+24900  HARNESS(claude=1)  claude -p --verbose --output-format stream-json --setting-sources user --json-schema "{  \"type\": \"object\",  \"properties\": {   \"findin
+28848  not-harness        "C:\Python314\python.exe"  "C:\Users\Chakri\AppData\Roaming\Python\Python314\Scripts\headroom.EXE" mcp serve

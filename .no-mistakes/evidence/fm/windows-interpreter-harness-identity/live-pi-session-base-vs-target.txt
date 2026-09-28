@@ -1,0 +1,14 @@
+[add-dir] extension module loaded
+[STT] Spawning: D:/Code/ENVS/pytorch/Scripts/python.exe C:\Users\Chakri\.pi\agent\extensions\voice\stt_server.py in C:\Users\Chakri\.pi\agent\extensions\voice\
+```
+--- BASE ff1175e fm-lock.sh acquire ---
+error: cannot locate harness process in ancestry
+exit=1
+--- TARGET fm-lock.sh acquire ---
+lock acquired: harness pid 7188
+exit=0
+--- Win32 row of lock pid 7188 ---
+pid=7188 image=C:\Program Files\nodejs\node.exe args="C:\Program Files\nodejs\node.exe" C:\Users\Chakri\AppData\Roaming\npm/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js -p --no-session --tools bash "Use the bash tool to run exactly: bash '/c/Users/Chakri/AppData/Local/Temp/fm-lab.1e0pRb/probe2.sh'  -- then reply with its complete output verbatim inside a code block and nothing else."
+--- fm-lock.sh status ---
+lock: held by live harness pid 7188
+```
