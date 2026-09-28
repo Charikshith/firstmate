@@ -53,21 +53,23 @@ fm_harness_path_name() {  # <path>
 }
 
 # Print the exact harness name that is a whole word of a path-like argument in
-# argument string $1 - words split at / - _ . @ and quotes - or return 1.
+# argument string $1 - words split at / - _ @ and quotes - or return 1.
 #
 # Windows cannot rename a process image, so a Node- or Python-hosted harness
 # that retitles itself elsewhere (Pi sets process.title to "pi") still reports
 # as node.exe there, and only its script path names it: .../pi-coding-agent/...
 # Whole words keep this safe the same way whole path components do above: api,
-# pipeline, and ompd are not pi or omp. Only arguments containing a slash are
-# read, so a prompt word never identifies a harness.
+# pipeline, and ompd are not pi or omp. A dot does not split, so a dot-directory
+# such as .pi or .omp (the fleet's own extension scripts) is never pi or omp.
+# Only arguments containing a slash are read, so a prompt word never identifies
+# a harness. Windows hosts only: elsewhere every harness retitles its process.
 fm_harness_word_name() {  # <args>
   local -a tokens words
   local token word name
   read -ra tokens <<< "$1"
   for token in "${tokens[@]:1}"; do
     case "$token" in */*) ;; *) continue ;; esac
-    IFS='/-_.@"'"'" read -ra words <<< "$token"
+    IFS='/-_@"'"'" read -ra words <<< "$token"
     for word in "${words[@]}"; do
       for name in "${FM_HARNESS_NAMES[@]}"; do
         [ "$word" = "$name" ] && { printf '%s' "$name"; return 0; }
@@ -88,7 +90,7 @@ fm_harness_word_name() {  # <args>
 #      name and ignores argv[0] entirely, so a version-named Claude Code binary
 #      is identified by its install path on macOS and by argv[0] on Linux.
 #   3. a bare interpreter (node, python) running a harness script path, by the
-#      loose regex or by an exact harness word in that path.
+#      loose regex or, on a Windows host, by an exact harness word in that path.
 #   4. Cursor's own structural identity, owned by bin/fm-cursor-lib.sh.
 FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
@@ -111,7 +113,7 @@ fm_harness_process_matches() {  # <comm> <args>
         case "$args" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
         return 0
       fi
-      if name=$(fm_harness_word_name "$args"); then
+      if fm_win_host && name=$(fm_harness_word_name "$args"); then
         case "$name" in claude) FM_HARNESS_IS_CLAUDE=1 ;; esac
         return 0
       fi
