@@ -356,6 +356,44 @@ test_lock_steals_dead_pid_lock() {
   pass "dead-pid stale lock is reclaimed by a single acquirer"
 }
 
+# Git Bash/MSYS on Windows silently falls back to an NTFS directory junction
+# for `ln -s <dir> <name>` when it lacks the privilege for a real symlink (no
+# admin, no Developer Mode): readlink cannot decode a junction's reparse data
+# even though ordinary traversal through it works fine, and this was
+# observed to leave every fm_lock_try_acquire call unable to confirm its own
+# freshly created lock, spinning forever. Unsetting MSYS forces that
+# fallback here regardless of the host's own symlink privilege, so this
+# exercises the fix everywhere, not only on a Windows host missing Developer
+# Mode; on a host where MSYS is not consulted at all, ln -s still makes a
+# real symlink and the same assertions cover that path instead.
+test_lock_acquire_release_survives_windows_junction_fallback() {
+  local dir state lockdir out rc marker
+  dir=$(make_case lock-junction-fallback)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  rc=0
+  out=$(FM_STATE_OVERRIDE="$state" bash -c '
+    unset MSYS
+    . "$1"
+    fm_lock_try_acquire "$2" || exit 7
+    [ -f "$2.owner-name" ] && cat "$2.owner-name" || echo MISSING-MARKER
+    cat "$2/pid"
+    fm_lock_release "$2"
+    [ -e "$2" ] && echo STILL-THERE || echo GONE
+    [ -f "$2.owner-name" ] && echo MARKER-LEAKED || echo MARKER-CLEAN
+  ' _ "$LIB" "$lockdir") || rc=$?
+  [ "$rc" -eq 0 ] || fail "acquire under a forced junction fallback failed (rc=$rc): $out"
+  marker=$(printf '%s\n' "$out" | sed -n 1p)
+  case "$marker" in
+    MISSING-MARKER) fail "no owner marker was published for the fallback lock" ;;
+    *"$lockdir.owner"*) ;;
+    *) fail "owner marker did not name an owner directory: $marker" ;;
+  esac
+  printf '%s\n' "$out" | grep -qx GONE || fail "lockdir remained after release: $out"
+  printf '%s\n' "$out" | grep -qx MARKER-CLEAN || fail "owner marker was not cleaned up on release: $out"
+  pass "acquire, marker publication, and release all survive a forced junction fallback"
+}
+
 # Start a process that claims each given link lock, then SIGKILL it so every
 # claim is left behind with a dead owner - an acquirer TERMed mid-steal.
 leave_dead_link_locks() {  # <state> <lock>...
@@ -1542,6 +1580,7 @@ test_live_stalled_watch_lock_is_replaced_past_hard_bound
 test_guard_warnings
 test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
+test_lock_acquire_release_survives_windows_junction_fallback
 test_lock_stale_steal_single_winner_under_concurrency
 test_lock_reclaims_dead_steal_owner_without_nested_markers
 test_lock_recovers_dead_nested_steal_chain

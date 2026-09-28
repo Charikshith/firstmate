@@ -489,19 +489,94 @@ fm_lock_prepare_owner() {
   [ "$back" = "$mypid" ]
 }
 
+# The owner marker is a plain sibling FILE next to lockdir, never traversed
+# through it, written by fm_lock_publish_owner_link right after ln -s
+# succeeds. It exists only as the fallback for hosts where ln -s falls back
+# to an NTFS junction (Git Bash/MSYS on Windows without the privilege for a
+# real symlink): readlink cannot decode a junction's reparse data, but
+# ordinary traversal through it (open/read/rmdir) works fine, and the marker
+# survives even a dangling junction - unlike a self-path file traversed
+# through lockdir, which stops being reachable the instant
+# fm_lock_reap_dead_link renames the dead owner aside for tombstoning, a
+# regression a first version of this fallback hit. Wherever a real symlink
+# exists (readlink works), fm_lock_link_owner/fm_lock_points_to_owner prefer
+# it and never touch this marker, so its post-ln-s write timing - fine for
+# the junction case, where reap is the only reader and always fires well
+# after creation - never has to be race-free against a fresh creation.
+fm_lock_owner_marker() {  # <lockdir>
+  printf '%s.owner-name\n' "$1"
+}
+
+fm_lock_is_indirected() {  # <lockdir>
+  local lockdir=$1
+  [ -L "$lockdir" ] && return 0
+  [ -f "$(fm_lock_owner_marker "$lockdir")" ]
+}
+
+fm_lock_publish_owner_link() {  # <lockdir> <ownerdir>
+  local lockdir=$1 ownerdir=$2 marker
+  marker=$(fm_lock_owner_marker "$lockdir")
+  { printf '%s\n' "$ownerdir" > "$marker"; } 2>/dev/null || return 1
+  [ "$(cat "$marker" 2>/dev/null || true)" = "$ownerdir" ]
+}
+
+fm_lock_forget_owner_link() {  # <lockdir>
+  rm -f "$(fm_lock_owner_marker "$1")" 2>/dev/null || true
+}
+
+# Remove lockdir itself without touching what it points to. rm -f handles a
+# real symlink, but Windows/Git-Bash's junction fallback for `ln -s <dir>` is
+# reported as a plain directory to unlink() too, so it fails there with
+# "Is a directory" - rmdir is the portable fallback, and Windows treats
+# removing a junction as removing only the reparse point, never the target's
+# contents, which is exactly the indirection this scheme relies on.
+fm_lock_unlink() {  # <lockdir>
+  local lockdir=$1 i
+  rm -f "$lockdir" 2>/dev/null && return 0
+  # Some Git-Bash/MSYS builds fall back further still: not a real symlink,
+  # not even an NTFS junction (a bare reparse point rmdir removes without
+  # touching the target), but a genuine recursive directory copy - readlink
+  # can't decode it either, matching the junction case, but rmdir correctly
+  # refuses it as non-empty because it truly is. Clearing the known files
+  # this scheme ever writes first empties that copy so rmdir can proceed; a
+  # true junction has nothing local to clear (its own dir entry has none of
+  # these names), so this is a harmless no-op there, redundant with the
+  # owner directory's own cleanup right after.
+  fm_lock_clean_known_files "$lockdir"
+  # A junction that was just read through (pid checks, staleness rechecks)
+  # observably makes rmdir transiently fail on Windows - a brief AV/indexer
+  # handle scan, not a real conflict - so a bounded retry absorbs it instead
+  # of surfacing a false "still there" that reroutes into another full reap
+  # cycle. 40 tries at 25ms is 1s worst case, negligible next to the 0.1s
+  # steps the caller's own retry loop already takes.
+  for i in $(seq 1 40); do
+    rmdir "$lockdir" 2>/dev/null && return 0
+    sleep 0.025
+  done
+  return 1
+}
+
+# Prefers readlink, which survives fm_lock_reap_dead_link renaming the
+# target aside for tombstoning since it reads the symlink's own stored
+# string rather than traversing into whatever is currently there; falls back
+# to the sibling marker only for a junction, where readlink cannot read
+# anything at all.
 fm_lock_link_owner() {
   local lockdir=$1 owner
-  owner=$(readlink "$lockdir" 2>/dev/null) || return 1
+  if [ -L "$lockdir" ]; then
+    owner=$(readlink "$lockdir" 2>/dev/null) || return 1
+    [ -n "$owner" ] || return 1
+    printf '%s\n' "$owner"
+    return 0
+  fi
+  owner=$(cat "$(fm_lock_owner_marker "$lockdir")" 2>/dev/null) || return 1
   [ -n "$owner" ] || return 1
-  case "$owner" in
-    /*) printf '%s\n' "$owner" ;;
-    *) printf '%s/%s\n' "$(dirname "$lockdir")" "$owner" ;;
-  esac
+  printf '%s\n' "$owner"
 }
 
 fm_lock_points_to_owner() {
   local lockdir=$1 ownerdir=$2 actual
-  actual=$(readlink "$lockdir" 2>/dev/null) || return 1
+  actual=$(fm_lock_link_owner "$lockdir" 2>/dev/null) || return 1
   [ "$actual" = "$ownerdir" ]
 }
 
@@ -523,7 +598,7 @@ fm_lock_remove_stray_owner_link() {
 fm_lock_claim_blocked_by_steal() {
   local lockdir=$1 allowed_steal_owner=${2:-} steal
   steal="$lockdir.steal"
-  [ -e "$steal" ] || [ -L "$steal" ] || return 1
+  [ -e "$steal" ] || fm_lock_is_indirected "$steal" || return 1
   if [ -n "$allowed_steal_owner" ] && fm_lock_points_to_owner "$steal" "$allowed_steal_owner"; then
     return 1
   fi
@@ -548,7 +623,7 @@ fm_lock_claim() {
   fi
   if fm_lock_claim_blocked_by_steal "$lockdir" "$allowed_steal_owner"; then
     if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
-      rm -f "$lockdir" 2>/dev/null || true
+      fm_lock_unlink "$lockdir" || true
     fi
     fm_lock_discard_owner "$ownerdir"
     return 1
@@ -560,7 +635,7 @@ fm_lock_try_create() {
   local lockdir=$1 allowed_steal_owner=${2:-} ownerdir
   FM_LOCK_OWNER_DIR=
   ownerdir=$(fm_lock_owner_dir "$lockdir") || return 1
-  if [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
+  if [ -e "$lockdir" ] || fm_lock_is_indirected "$lockdir"; then
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
@@ -568,13 +643,37 @@ fm_lock_try_create() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  if ln -s "$ownerdir" "$lockdir" 2>/dev/null && fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
-    if fm_lock_claim "$lockdir" "$ownerdir" "$allowed_steal_owner"; then
-      FM_LOCK_OWNER_DIR=$ownerdir
-      return 0
-    fi
-    if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
-      rm -f "$lockdir" 2>/dev/null || true
+  if ln -s "$ownerdir" "$lockdir" 2>/dev/null; then
+    if fm_lock_publish_owner_link "$lockdir" "$ownerdir" && fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
+      if fm_lock_claim "$lockdir" "$ownerdir" "$allowed_steal_owner"; then
+        FM_LOCK_OWNER_DIR=$ownerdir
+        return 0
+      fi
+      if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
+        fm_lock_unlink "$lockdir" || true
+        fm_lock_forget_owner_link "$lockdir"
+      fi
+    else
+      # ln -s returning success here is not proof lockdir is ours: this
+      # Git-Bash/MSYS setup was observed to report success as a silent no-op
+      # against an already-existing target (never actually relinking it),
+      # so a verification failure right after can mean a genuine live
+      # winner sits there untouched. Only points_to_owner - re-read through
+      # lockdir, never assumed - may authorize touching lockdir; otherwise
+      # this is exactly the stray-nested-link case below.
+      if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
+        fm_lock_unlink "$lockdir" || true
+        fm_lock_forget_owner_link "$lockdir"
+      else
+        fm_lock_remove_stray_owner_link "$lockdir" "$ownerdir"
+      fi
+      # Our own publish call above may have landed on the shared sibling
+      # marker even when ln -s never actually gave us lockdir (same silent
+      # no-op) - only forget it while it still reads back as our own value,
+      # never a concurrent winner's own later publish of the same path.
+      if [ "$(cat "$(fm_lock_owner_marker "$lockdir")" 2>/dev/null)" = "$ownerdir" ]; then
+        fm_lock_forget_owner_link "$lockdir"
+      fi
     fi
   else
     fm_lock_remove_stray_owner_link "$lockdir" "$ownerdir"
@@ -585,9 +684,10 @@ fm_lock_try_create() {
 
 fm_lock_remove_path() {
   local lockdir=$1 ownerdir
-  if [ -L "$lockdir" ]; then
+  if fm_lock_is_indirected "$lockdir"; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
-    rm -f "$lockdir" 2>/dev/null || return 1
+    fm_lock_unlink "$lockdir" || return 1
+    fm_lock_forget_owner_link "$lockdir"
     [ -n "$ownerdir" ] && fm_lock_discard_owner "$ownerdir"
     return 0
   fi
@@ -599,6 +699,16 @@ fm_lock_mid_acquire_is_fresh() {
   local lockdir=$1 pid=$2 mid_acquire_stale
   case "$pid" in
     ''|*[!0-9]*)
+      # fm_path_age's 999999 sentinel for "does not exist" would otherwise
+      # read as long-stale, misclassifying plain absence - nobody has
+      # created the lock yet, so there is no dead holder to steal from at
+      # all - as a dead claimant to reclaim. Pre-existing on every platform;
+      # Windows' slower process spawn and directory-entry visibility just
+      # make the window common enough to hit, where fork()-based hosts
+      # rarely observe it. A missing lockdir is fresh: report busy and let
+      # the ordinary retry loop take the next open attempt, same as a
+      # genuinely mid-write one.
+      [ -e "$lockdir" ] || fm_lock_is_indirected "$lockdir" || return 0
       mid_acquire_stale=$FM_LOCK_STALE_AFTER
       [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
       [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
@@ -963,7 +1073,7 @@ fm_recovery_marker_reopen_announced() {
 # reaper whose own election a trap interrupted resumes it from its tombstone.
 fm_lock_reap_dead_link() {
   local lockdir=$1 owner pid token tomb current
-  [ -L "$lockdir" ] || return 1
+  fm_lock_is_indirected "$lockdir" || return 1
   owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null) || return 1
   fm_current_pid current || return 1
   if [ -d "$owner" ]; then
@@ -986,7 +1096,8 @@ fm_lock_reap_dead_link() {
     mv -- "$token" "$tomb" 2>/dev/null || return 1
   fi
   if fm_lock_points_to_owner "$lockdir" "$owner"; then
-    rm -f "$lockdir" 2>/dev/null || true
+    fm_lock_unlink "$lockdir" || true
+    fm_lock_forget_owner_link "$lockdir"
   fi
   fm_lock_discard_owner "$tomb"
 }
@@ -1004,7 +1115,7 @@ fm_lock_try_acquire_steal_mutex() {  # <steal-lock>
   fm_lock_reap_dead_link "$lockdir.steal" || true
   if [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$current" ]; then
     fm_lock_remove_path "$lockdir" || true
-  elif [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
+  elif [ -e "$lockdir" ] || fm_lock_is_indirected "$lockdir"; then
     fm_lock_reap_dead_link "$lockdir" || return 1
   fi
   fm_lock_try_create "$lockdir"
@@ -1076,7 +1187,7 @@ fm_lock_try_acquire() {
   fi
 
   primary_owner=
-  if [ -L "$lockdir" ]; then
+  if fm_lock_is_indirected "$lockdir"; then
     primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
   fi
   cur=$(cat "$lockdir/pid" 2>/dev/null || true)
@@ -1110,10 +1221,20 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# Random jitter in [0.05, 0.15)s between retries. A fixed interval lets two
+# contenders that started their wait loops close together stay in lockstep,
+# each one's claim tripping the other's steal-mutex guard on every single
+# cycle - a real livelock observed under concurrent lock confirmations on
+# Windows, not merely slow contention. Jitter breaks the synchronization.
+fm_lock_retry_sleep() {
+  local ms=$(( (RANDOM % 100) + 50 ))
+  sleep "$(printf '0.%03d' "$ms")"
+}
+
 fm_lock_acquire_wait() {
   local lockdir=$1
   while ! fm_lock_try_acquire "$lockdir"; do
-    sleep 0.1
+    fm_lock_retry_sleep
   done
 }
 
@@ -1126,7 +1247,7 @@ fm_lock_acquire_wait_max() {  # <lockdir> <max-seconds>
   deadline=$((SECONDS + seconds))
   while ! fm_lock_try_acquire "$lockdir"; do
     [ "$SECONDS" -lt "$deadline" ] || return 1
-    sleep 0.1
+    fm_lock_retry_sleep
   done
 }
 
@@ -1140,7 +1261,7 @@ _fm_lock_acquire_wait_handoff() {  # <lockdir> <caller-pid>
   fm_pid_alive "$caller_pid" || return 1
   trap 'fm_lock_release "$lockdir"; exit 143' TERM INT
   fm_lock_acquire_wait "$lockdir" || return 1
-  if [ -L "$lockdir" ]; then
+  if fm_lock_is_indirected "$lockdir"; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null) || {
       fm_lock_release "$lockdir"
       return 1
@@ -1222,13 +1343,14 @@ fm_lock_acquire_wait_bounded() {
 fm_lock_release() {
   local lockdir=$1 pid current ownerdir
   fm_current_pid current || return 1
-  if [ -L "$lockdir" ]; then
+  if fm_lock_is_indirected "$lockdir"; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
     pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
     [ "$pid" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
-    rm -f "$lockdir" 2>/dev/null || return 0
+    fm_lock_unlink "$lockdir" || return 0
+    fm_lock_forget_owner_link "$lockdir"
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi

@@ -149,13 +149,25 @@ fm_win_process_table() {
 # executable path with forward slashes and no .exe suffix, so the shared matcher
 # sees the same shape it sees on macOS; args is the command line with forward
 # slashes. An empty or unreadable table fails closed.
-# ponytail: one snapshot per shell (~0.2s); a caller that walks inside $(...)
-# loads its own, cache to a file if a hot path ever needs it.
+# A hot path now needs the file cache: bin/fm-lock.sh's own confirm-own-lock
+# check re-walks the ancestry inside $(...), which forks and loses this
+# in-memory flag, so every such call paid its own fresh multi-second
+# PowerShell round trip - fine alone, but compounding badly when concurrent
+# lock confirmations contend for the same CPU/WMI subsystem. $$ stays the
+# top-level script's pid even inside a command-substitution subshell (unlike
+# BASHPID), so it names one snapshot shared by every subshell of one script
+# run without colliding with a concurrent process's own cache file.
 FM_WIN_TABLE_LOADED=0
 fm_win_table_load() {
   [ "$FM_WIN_TABLE_LOADED" -eq 1 ] && return 0
   local table pid ppid created exe cmd rows=0
-  table=$(fm_win_process_table | tr -d '\r') || return 1
+  local cache="${TMPDIR:-/tmp}/.fm-win-table.$$"
+  if [ -s "$cache" ]; then
+    table=$(cat "$cache" 2>/dev/null)
+  else
+    table=$(fm_win_process_table | tr -d '\r') || return 1
+    printf '%s' "$table" > "$cache" 2>/dev/null || true
+  fi
   FM_WIN_PPID=() FM_WIN_CREATED=() FM_WIN_COMM=() FM_WIN_ARGS=()
   while IFS=$'\t' read -r pid ppid created exe cmd; do
     case "$pid:$ppid:$created" in *[!0-9:]*|:*|*::*|*:) continue ;; esac
