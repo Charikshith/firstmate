@@ -1180,7 +1180,9 @@ fm_lock_reap_dead_link() {
 # a reaper that verified an older instance can never win against it. A dead
 # reaper's tombstone is re-elected the same way. A directory with no token has
 # no identity yet or any more, and rmdir removes only an empty one, so it can
-# never take a successor that has already written its token.
+# never take a successor that has already written its token. A non-empty one
+# (a copy left by the former Windows link fallback) is given a token named for
+# its dead pid, the same for every reaper, and goes through the election.
 fm_lock_reap_dead_dir() {  # <lockdir>
   local lockdir=$1 entry token='' tomb pid current reaper
   fm_current_pid current || return 1
@@ -1192,7 +1194,8 @@ fm_lock_reap_dead_dir() {  # <lockdir>
     rmdir "$lockdir" 2>/dev/null && return 0
     pid=$(cat "$lockdir/pid" 2>/dev/null || true)
     fm_lock_recheck_stale_owner "$lockdir" "" "$pid" || return 1
-    fm_lock_remove_dir "$lockdir"
+    { : > "$lockdir/owner.$pid.legacy"; } 2>/dev/null || return 1
+    fm_lock_reap_dead_dir "$lockdir"
     return
   fi
   case "$token" in

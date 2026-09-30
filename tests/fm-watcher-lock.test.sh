@@ -914,6 +914,69 @@ test_mkdir_lock_reclaims_tokenless_dead_steal_copy() {
   pass "a tokenless dead steal-mutex copy is reclaimed under the mkdir scheme"
 }
 
+# Two reapers that both verified the same dead tokenless steal copy: the one
+# paused at its first removal or election step must not remove the steal mutex
+# the other reaped and recreated in the meantime.
+test_mkdir_lock_tokenless_reap_cannot_remove_successor() {
+  local dir state steal fakebin out rc
+  dir=$(make_case lock-mkdir-tokenless-reap-race)
+  state="$dir/state"
+  steal="$state/.contend.lock.steal"
+  fakebin="$dir/fakebin"
+  out="$dir/competitor"
+  mkdir "$steal"
+  printf '%s\n' "$(dead_pid)" > "$steal/pid"
+  touch -t 202001010000 "$steal"
+  cat > "$fakebin/race-hook" <<'SH'
+#!/usr/bin/env bash
+for arg do
+  case "$arg" in "$FM_TEST_RACE_PATH"/*) race=1 ;; esac
+done
+if [ -n "${race:-}" ] && mkdir "$FM_TEST_RACE_ONCE" 2>/dev/null; then
+  bash -c '
+    . "$1"
+    if fm_lock_try_acquire_steal_mutex "$2"; then
+      printf "won %s\n" "${BASHPID:-$$}" > "$3"
+      exec sleep 30
+    fi
+    printf "lost\n" > "$3"
+  ' _ "$FM_TEST_LIB" "$FM_TEST_RACE_PATH" "$FM_TEST_RACE_OUT" >/dev/null 2>&1 &
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$FM_TEST_RACE_OUT" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+fi
+exec "/bin/${0##*/}" "$@"
+SH
+  chmod +x "$fakebin/race-hook"
+  cp "$fakebin/race-hook" "$fakebin/mv"
+  cp "$fakebin/race-hook" "$fakebin/rm"
+
+  rc=0
+  PATH="$fakebin:$PATH" FM_TEST_LIB="$MKDIR_LIB" FM_TEST_RACE_PATH="$steal" \
+    FM_TEST_RACE_ONCE="$dir/race-once" FM_TEST_RACE_OUT="$out" \
+    FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      fm_lock_try_acquire_steal_mutex "$2" || exit 1
+      [ "$(cat "$2/pid" 2>/dev/null)" = "${BASHPID:-$$}" ] || exit 2
+    ' _ "$MKDIR_LIB" "$steal" || rc=$?
+  [ -d "$dir/race-once" ] || fail "tokenless reap race hook never fired"
+  case "$(cat "$out" 2>/dev/null || true)" in
+    won\ *)
+      [ "$(cat "$steal/pid" 2>/dev/null || true)" = "$(sed 's/^won //' "$out")" ] \
+        || { kill -KILL "$(sed 's/^won //' "$out")" 2>/dev/null || true; fail "tokenless reaper removed the successor's steal mutex"; }
+      kill -KILL "$(sed 's/^won //' "$out")" 2>/dev/null || true
+      [ "$rc" -ne 0 ] || fail "competing tokenless reapers both hold the steal mutex"
+      ;;
+    lost)
+      [ "$rc" -eq 0 ] || fail "no reaper acquired the dead tokenless steal copy (rc=$rc)"
+      ;;
+    *) fail "competing tokenless reaper did not report an outcome" ;;
+  esac
+  pass "a competing reaper cannot remove the successor of a tokenless steal copy"
+}
+
 # Run a generic lock case against the forced mkdir scheme.
 with_mkdir_lock() {  # <test-function>
   TMP_ROOT="$TMP_ROOT/mkdir-scheme" LIB=$MKDIR_LIB "$1"
@@ -1758,6 +1821,7 @@ test_mkdir_lock_steal_reap_cannot_remove_successor
 test_mkdir_lock_recovers_dead_reaper_tombstone
 test_mkdir_lock_spares_stalled_live_creator
 test_mkdir_lock_reclaims_tokenless_dead_steal_copy
+test_mkdir_lock_tokenless_reap_cannot_remove_successor
 with_mkdir_lock test_lock_single_winner_under_concurrency
 with_mkdir_lock test_lock_steals_dead_pid_lock
 with_mkdir_lock test_lock_stale_steal_single_winner_under_concurrency
