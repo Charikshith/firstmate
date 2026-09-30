@@ -2183,6 +2183,17 @@ fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
   # descendant of the pane shell outside the foreground group; only its
   # absence, read from the real process table, is proof of an agent-free pane.
   [ "$others" -eq 0 ] || { printf 'other'; return 0; }
+  # Windows: herdr's shell_pid is a Win32 pid and MSYS ps rejects -o, so the
+  # descendant walk reads the Win32 process table instead.
+  if declare -F fm_win_host >/dev/null && fm_win_host; then
+    fm_backend_herdr_win_descendant_agent "$shell_pid"
+    case $? in
+      0) printf 'agent' ;;
+      1) printf 'shell' ;;
+      *) printf 'unreadable' ;;
+    esac
+    return 0
+  fi
   ps_bin=${FM_HERDR_PS_BIN:-ps}
   command -v "$ps_bin" >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
   rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,comm= 2>/dev/null) || { printf 'unreadable'; return 0; }
@@ -2220,6 +2231,37 @@ $(printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
   }')
 EOF
   printf 'shell'
+}
+
+# fm_backend_herdr_win_descendant_agent: the Windows leg of the descendant walk
+# above. Returns 0 when a verified harness descends from Win32 pid <shell>, 1
+# when none does, and 2 when the table is unreadable or lacks the shell pid.
+fm_backend_herdr_win_descendant_agent() {  # <shell-winpid>
+  local shell=$1 table pid exe args name
+  table=$(fm_win_process_table) || return 2
+  printf '%s\n' "$table" | awk -F'\t' -v s="$shell" '$1 == s { f = 1 } END { exit(f ? 0 : 1) }' || return 2
+  while IFS=$'\t' read -r pid exe args; do
+    [ -n "$pid" ] || continue
+    exe=${exe//\\//}
+    name=${exe##*/}
+    name=${name%.exe}
+    [ "$(fm_agent_process_classify "$name" "${exe%.exe}" "${args//\\//}")" = agent ] && return 0
+  done <<EOF
+$(printf '%s\n' "$table" | awk -F'\t' -v shell="$shell" '
+  { pid[NR] = $1; ppid[NR] = $2; exe[NR] = $4; cmd[NR] = $5 }
+  END {
+    want[shell] = 1
+    changed = 1
+    while (changed) {
+      changed = 0
+      for (n = 1; n <= NR; n++)
+        if ((ppid[n] in want) && !(pid[n] in want)) { want[pid[n]] = 1; changed = 1 }
+    }
+    for (n = 1; n <= NR; n++)
+      if ((pid[n] in want) && pid[n] != shell) printf "%s\t%s\t%s\n", pid[n], exe[n], cmd[n]
+  }')
+EOF
+  return 1
 }
 
 # fm_backend_herdr_pane_agent_state: classify <pane_id> in <session> as one of
