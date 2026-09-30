@@ -84,6 +84,15 @@ Install Herdr's Windows preview from PowerShell:
 irm https://herdr.dev/install.ps1 | iex
 ```
 
+Herdr opens new panes in PowerShell by default, but firstmate types POSIX commands into each worker pane and needs the Git Bash PATH there.
+Add this to `%APPDATA%\herdr\config.toml`, then run `herdr config check` and `herdr server reload-config`:
+
+```toml
+[terminal]
+default_shell = "C:/Program Files/Git/bin/bash.exe"
+shell_mode = "login"
+```
+
 Start Herdr, open a pane, and launch Claude Code from the firstmate checkout:
 
 ```sh
@@ -97,8 +106,8 @@ The session-start summary must not show a read-only banner; if it does, the bann
 
 ## Current limits
 
-- Worker spawning through Herdr's Windows preview is not yet verified end to end; the tmux, Zellij, Orca, and cmux backends have no Windows support.
-- Git Bash mounts drives without POSIX permission bits, so firstmate's trusted-file permission checks refuse on Windows, which keeps custom monitoring checks and pull-request merge polling off.
+- Herdr is the only backend with Windows support; the tmux, Zellij, Orca, and cmux backends have none.
+- Git Bash mounts drives without POSIX permission bits, so the herdr presentation lock and process-event state directories are accepted on ownership alone there, relying on the per-user `%TEMP%` ACL; the trusted-file permission checks still refuse, which keeps custom monitoring checks and pull-request merge polling off.
 - There is no `lsof`, so an abandoned lock or worktree is not reclaimed automatically and needs manual cleanup.
 - no-mistakes runs the repository's lint command through `cmd.exe`, which cannot run `bin/fm-lint.sh`, so its lint step reports a failure on Windows; run `bin/fm-lint.sh` in Git Bash and approve the step only when it passes.
 - `bin/fm-install-actionlint.sh` refuses Windows; install actionlint's Windows release archive by hand.
