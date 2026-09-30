@@ -2248,14 +2248,19 @@ fm_backend_herdr_win_descendant_agent() {  # <shell-winpid>
     [ "$(fm_agent_process_classify "$name" "${exe%.exe}" "${args//\\//}")" = agent ] && return 0
   done <<EOF
 $(printf '%s\n' "$table" | awk -F'\t' -v shell="$shell" '
-  { pid[NR] = $1; ppid[NR] = $2; exe[NR] = $4; cmd[NR] = $5 }
+  function predates(p, c) {
+    p = cr[p] ""; c = cr[c] ""
+    if (p !~ /^[1-9][0-9]*$/ || c !~ /^[1-9][0-9]*$/) return 0
+    return length(p) < length(c) || (length(p) == length(c) && p <= c)
+  }
+  { pid[NR] = $1; ppid[NR] = $2; cr[$1] = $3; exe[NR] = $4; cmd[NR] = $5 }
   END {
     want[shell] = 1
     changed = 1
     while (changed) {
       changed = 0
       for (n = 1; n <= NR; n++)
-        if ((ppid[n] in want) && !(pid[n] in want)) { want[pid[n]] = 1; changed = 1 }
+        if ((ppid[n] in want) && !(pid[n] in want) && predates(ppid[n], pid[n])) { want[pid[n]] = 1; changed = 1 }
     }
     for (n = 1; n <= NR; n++)
       if ((pid[n] in want) && pid[n] != shell) printf "%s\t%s\t%s\n", pid[n], exe[n], cmd[n]
@@ -3110,12 +3115,17 @@ fm_backend_herdr_win_shell_cwd() {
   case "$shell" in ''|*[!0-9]*) return 0 ;; esac
   # "<winpid> <depth>" for every Win32 descendant of the pane's shell.
   depths=$(fm_win_process_table | awk -F'\t' -v root="$shell" '
-    { kids[$2] = kids[$2] " " $1 }
+    function predates(p, c) {
+      p = cr[p] ""; c = cr[c] ""
+      if (p !~ /^[1-9][0-9]*$/ || c !~ /^[1-9][0-9]*$/) return 0
+      return length(p) < length(c) || (length(p) == length(c) && p <= c)
+    }
+    { kids[$2] = kids[$2] " " $1; cr[$1] = $3 }
     END {
       q[1] = root; depth[root] = 0; n = 1
       for (i = 1; i <= n; i++) {
         c = split(kids[q[i]], k, " ")
-        for (j = 1; j <= c; j++) if (!(k[j] in depth)) { depth[k[j]] = depth[q[i]] + 1; q[++n] = k[j]; print k[j], depth[k[j]] }
+        for (j = 1; j <= c; j++) if (!(k[j] in depth) && predates(q[i], k[j])) { depth[k[j]] = depth[q[i]] + 1; q[++n] = k[j]; print k[j], depth[k[j]] }
       }
     }')
   [ -n "$depths" ] || return 0
