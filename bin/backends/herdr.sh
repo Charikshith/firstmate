@@ -804,8 +804,15 @@ fm_backend_herdr_presentation_lock_namespace_valid() {
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
   expected_uid=$(id -u 2>/dev/null) || return 1
   owner=$(fm_backend_herdr_presentation_lock_namespace_uid "$dir") || return 1
+  [ "$owner" = "$expected_uid" ] || return 1
+  # Windows (captain-approved): Git Bash's noacl mounts report every directory
+  # as 755 and ignore chmod, so ownership alone decides there; the per-user
+  # %TEMP% ACL behind /tmp is what keeps it private.
+  if declare -F fm_win_host >/dev/null && fm_win_host; then
+    return 0
+  fi
   mode=$(fm_backend_herdr_presentation_lock_namespace_mode "$dir") || return 1
-  [ "$owner" = "$expected_uid" ] && [ "$mode" = 700 ]
+  [ "$mode" = 700 ]
 }
 
 # Resolve the one verified running named-session socket path as an absolute
