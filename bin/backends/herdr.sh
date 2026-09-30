@@ -2240,6 +2240,7 @@ fm_backend_herdr_win_descendant_agent() {  # <shell-winpid>
   local shell=$1 table pid exe args name
   table=$(fm_win_process_table) || return 2
   printf '%s\n' "$table" | awk -F'\t' -v s="$shell" '$1 == s { f = 1 } END { exit(f ? 0 : 1) }' || return 2
+  table+=$'\n'$(fm_backend_herdr_win_msys_edges)
   while IFS=$'\t' read -r pid exe args; do
     [ -n "$pid" ] || continue
     exe=${exe//\\//}
@@ -2253,20 +2254,35 @@ $(printf '%s\n' "$table" | awk -F'\t' -v shell="$shell" '
     if (p !~ /^[1-9][0-9]*$/ || c !~ /^[1-9][0-9]*$/) return 0
     return length(p) < length(c) || (length(p) == length(c) && p <= c)
   }
-  { pid[NR] = $1; ppid[NR] = $2; cr[$1] = $3; exe[NR] = $4; cmd[NR] = $5 }
+  { pid[NR] = $1; ppid[NR] = $2; msys[NR] = (NF == 2) }
+  NF > 2 { cr[$1] = $3; exe[NR] = $4; cmd[NR] = $5 }
   END {
     want[shell] = 1
     changed = 1
     while (changed) {
       changed = 0
       for (n = 1; n <= NR; n++)
-        if ((ppid[n] in want) && !(pid[n] in want) && predates(ppid[n], pid[n])) { want[pid[n]] = 1; changed = 1 }
+        if ((ppid[n] in want) && !(pid[n] in want) && (msys[n] || predates(ppid[n], pid[n]))) { want[pid[n]] = 1; changed = 1 }
     }
     for (n = 1; n <= NR; n++)
-      if ((pid[n] in want) && pid[n] != shell) printf "%s\t%s\t%s\n", pid[n], exe[n], cmd[n]
+      if (!msys[n] && (pid[n] in want) && pid[n] != shell) printf "%s\t%s\t%s\n", pid[n], exe[n], cmd[n]
   }')
 EOF
   return 1
+}
+
+# fm_backend_herdr_win_msys_edges: "<child-winpid>\t<parent-winpid>" for every
+# live MSYS parent/child pair in /proc. An MSYS fork's Win32 parent is a stub
+# that exits at once, so a plain `bash` started from bash is linked only here;
+# /proc's ppid is live MSYS state, so it needs no pid-reuse guard. ppid 1
+# means no MSYS parent.
+fm_backend_herdr_win_msys_edges() {
+  local p pp w pw
+  for p in /proc/[0-9]*; do
+    { read -r pp < "$p/ppid" && read -r w < "$p/winpid" && read -r pw < "/proc/$pp/winpid"; } 2>/dev/null || continue
+    [ "$pp" -gt 1 ] && printf '%s\t%s\n' "$w" "$pw"
+  done
+  return 0
 }
 
 # fm_backend_herdr_pane_agent_state: classify <pane_id> in <session> as one of
@@ -3105,7 +3121,8 @@ fm_backend_herdr_current_path() {  # <target>
 # fm_backend_herdr_win_shell_cwd: the live cwd of the deepest MSYS bash running
 # under the resolved pane's shell, or empty. The Win32 process table supplies
 # the ancestry, because a native launcher (Git's bin/bash.exe, treehouse.exe)
-# reparents each MSYS child to pid 1 in /proc, and the deepest bash is the
+# reparents each MSYS child to pid 1 in /proc, while a plain MSYS fork's Win32
+# parent is an exited stub, so both edge sets are merged; the deepest bash is the
 # subshell `treehouse get` entered. The table is read fresh on every call since
 # the caller polls for exactly that change.
 fm_backend_herdr_win_shell_cwd() {
@@ -3114,13 +3131,16 @@ fm_backend_herdr_win_shell_cwd() {
     | jq -r '.result.process_info.shell_pid // empty' 2>/dev/null)
   case "$shell" in ''|*[!0-9]*) return 0 ;; esac
   # "<winpid> <depth>" for every Win32 descendant of the pane's shell.
-  depths=$(fm_win_process_table | awk -F'\t' -v root="$shell" '
+  depths=$({ fm_win_process_table; fm_backend_herdr_win_msys_edges; } | awk -F'\t' -v root="$shell" '
     function predates(p, c) {
+      if ((p, c) in msys) return 1
       p = cr[p] ""; c = cr[c] ""
       if (p !~ /^[1-9][0-9]*$/ || c !~ /^[1-9][0-9]*$/) return 0
       return length(p) < length(c) || (length(p) == length(c) && p <= c)
     }
-    { kids[$2] = kids[$2] " " $1; cr[$1] = $3 }
+    { kids[$2] = kids[$2] " " $1 }
+    NF == 2 { msys[$2, $1] = 1 }
+    NF > 2 { cr[$1] = $3 }
     END {
       q[1] = root; depth[root] = 0; n = 1
       for (i = 1; i <= n; i++) {
