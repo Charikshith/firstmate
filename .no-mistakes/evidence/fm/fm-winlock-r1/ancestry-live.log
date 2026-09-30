@@ -1,0 +1,14 @@
+== A. plain shell
+  28184 bash [-] "C:/Program - - - /c/Users/Chakri/.claude/shell-snapshots/snapshot-bash-1790788261614-73yjoy.sh - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - /c/Users/Chakri/AppData/Local/Temp/claude-6464-cwd"
+  21372 bash [-] "C:/Program - - - /c/Users/Chakri/.claude/shell-snapshots/snapshot-bash-1790788261614-73yjoy.sh - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - /c/Users/Chakri/AppData/Local/Temp/claude-6464-cwd"
+  22824 claude [HARNESS] claude - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+  22708 no-mistakes [-] C:/Users/Chakri/bin/no-mistakes.exe -
+  (walk ends: parent 14220 not in process table)
+  => session-lock owner: 22824 claude
+== B. same shell under: node <T>/work/pi/tool.js
+  23852 bash [-] "C:/Program -
+  10316 node [-] "C:/Program -
+  32976 bash [-] "C:/Program -
+  26740 bash [-] "C:/Program -
+  (walk ends: parent 27760 not in process table)
+  => session-lock owner: none 

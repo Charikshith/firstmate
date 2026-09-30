@@ -1,0 +1,13 @@
+fm_win_host: yes
+unrelated C:/work/pi/tool.js (winpid 29332) comm=node -> not a harness
+pi-coding-agent cli.js (winpid 26700) comm=node -> HARNESS
+cache file: .fm-win-table.35245
+cache rows: 446
+cache lines containing the secret argv token: 0
+cache row for unrelated node process:
+29332	22904	134352619347625620	C:/Program Files/nodejs/node	"C:/Program -
+cache row for pi-coding-agent process:
+26700	33052	134352619347683650	C:/Program Files/nodejs/node	"C:/Program - <T>/npm/node_modules/@mariozechner/pi-coding-agent/dist/cli.js
+cache ACL (icacls):
+sed: -e expression #1, char 8: unterminated `s' command
+sed: -e expression #1, char 0: no previous regular expression

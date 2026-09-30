@@ -1,0 +1,21 @@
+== 1. live holder blocks a contender
+holder pid=33456
+.
+..
+owner.33456.263536857
+pid
+contender refused while holder alive (ok)
+== 2. non-owner release is a no-op
+lock still held by pid 33456 (ok)
+== 3. SIGKILL the holder, then a new contender reclaims
+lock dir left behind by dead holder:
+.
+..
+owner.33456.263536857
+pid
+reclaimed by pid=33591 recovered_from=33456
+33591
+lock exists after release? no
+stray entries in state dir:
+.
+..

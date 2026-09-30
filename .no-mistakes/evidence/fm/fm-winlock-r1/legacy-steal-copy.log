@@ -1,0 +1,22 @@
+before: legacy lock entries (dead pid 6030):
+/tmp/tmp.HpZiprLO6y/state/legacy.lock:
+.
+..
+pid
+
+/tmp/tmp.HpZiprLO6y/state/legacy.lock.steal:
+.
+..
+pid
+enter 6040
+exit 6040
+enter 6046
+exit 6046
+enter 6041
+exit 6041
+enter 6044
+exit 6044
+RESULT: 4 contenders held the lock one at a time
+after: lock or steal leftovers?
+.
+..

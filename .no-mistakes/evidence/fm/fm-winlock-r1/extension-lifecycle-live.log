@@ -1,0 +1,13 @@
+native mkdir lock scheme on this host: yes
+== bind
+error[platform-unsupported]: extension bindings require a POSIX user identity
+bind exit=1
+lifecycle lock after bind exists? yes
+== retire-binding
+error[platform-unsupported]: extension bindings require a POSIX user identity
+retire exit=1
+lifecycle lock after retire exists? yes
+procevent dir entries:
+.
+..
+.extension-binding-lifecycle.lock
