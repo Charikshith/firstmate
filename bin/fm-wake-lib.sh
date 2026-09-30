@@ -717,10 +717,6 @@ fm_lock_mid_acquire_is_fresh() {
   local lockdir=$1 pid=$2 mid_acquire_stale
   case "$pid" in
     ''|*[!0-9]*)
-      # fm_path_age reports a missing path as long-stale, but an absent lock
-      # has no dead claimant to reclaim: report busy and let the retry loop
-      # take the next open attempt.
-      [ -e "$lockdir" ] || [ -L "$lockdir" ] || return 0
       mid_acquire_stale=$FM_LOCK_STALE_AFTER
       [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
       [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
