@@ -1,0 +1,43 @@
+lab session: fm-lab-wintest-58531-21306 ; pane w1:p1 shell = C:/Program Files/Git/bin/bash.exe -l (Herdr default_shell)
+## after 'cd /tmp/fmr3-sub' in pane shell
+new (901404b): [/tmp/fmr3-sub]
+pre-fix (bf77c00): [/tmp/fmr3-sub]
+## ADVERSARIAL: plain MSYS subshell 'bash' then 'cd /tmp/fmr3-deeper'
+new (901404b): [/tmp/fmr3-deeper]
+pre-fix (bf77c00): [/tmp/fmr3-sub]
+## ADVERSARIAL: second nested MSYS subshell then 'cd /tmp/fmr3-deepest'
+new (901404b): [/tmp/fmr3-deepest]
+pre-fix (bf77c00): [/tmp/fmr3-sub]
+/proc view:
+  msys=19977 win=72992 ppid=58796 cwd=/tmp/fmr3-deeper
+  msys=20601 win=67312 ppid=19977 cwd=/tmp/fmr3-deepest
+  msys=58796 win=34576 ppid=1 cwd=/tmp/fmr3-sub
+## after 'exit' from deepest subshell
+new (901404b): [/tmp/fmr3-deeper]
+pre-fix (bf77c00): [/tmp/fmr3-sub]
+## after 'exit' back to the first shell
+new (901404b): [/tmp/fmr3-sub]
+pre-fix (bf77c00): [/tmp/fmr3-sub]
+
+# Pane-state: real claude.exe under a plain MSYS subshell (pane shell_pid=31492)
+herdr foreground: ["claude.exe"]
+claude ancestry (/proc): msys=23314 win=66992 ppid=23213 ppid-exe=/usr/bin/bash
+msys=61655 win=30368 ppid=60320 ppid-exe=/usr/bin/bash
+new (901404b) fm_backend_herdr_win_descendant_agent rc=0   (0=agent)
+pre-fix (bf77c00) rc=1
+new fm_backend_herdr_pane_process_state_sample: agent
+## after choosing 'No, exit' at claude's trust prompt (claude exits; still inside the MSYS subshell)
+herdr foreground: ["bash.exe"]
+new fm_backend_herdr_win_descendant_agent rc=1   (1=shell, no agent)
+ADVERSARIAL absent shell pid 999999: rc=2   (2=unreadable)
+note: the other claude.exe listed above (msys 61655) belongs to a different, non-lab bash tree; it was never attributed to the lab pane (rc=1 after exit).
+
+# Regression: native-launcher chain (cmd.exe -> Git bin/bash.exe, as treehouse get does) from inside the MSYS subshell, then cd /tmp/fmr3-native
+new (901404b): [/tmp/fmr3-native]
+
+# Regression: pid-reuse guard kept (synthetic orphan claude.exe row with ppid=pane shell 31492, shell created=134352228334016470, injected into the real table)
+orphan created OLDER than shell (1): rc=1  (expect 1: ignored)
+created 0: rc=1  (expect 1: ignored)
+created NEWER than shell (1343522283340164709): rc=0  (expect 0: accepted)
+teardown rc=0
+[{"name":"default","default":true},{"name":"fm-win-probe-2021","default":false}]

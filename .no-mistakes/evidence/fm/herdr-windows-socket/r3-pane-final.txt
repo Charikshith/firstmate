@@ -1,0 +1,55 @@
+
+Chakri@DESKTOP-A7PUCIK MINGW64 ~/.no-mistakes/worktrees/199e09f5c085/01M3RDVGWMA5EYAMZ2ZVZ6EBRX ((901404b...))
+$ mkdir -p /tmp/fmr3-sub /tmp/fmr3-deeper /tmp/fmr3-deepest; cd /tmp/fmr3-sub
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-sub (master)
+$ bash
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-sub (master)
+$ cd /tmp/fmr3-deeper
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-deeper (master)
+$ bash
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-deeper (master)
+$ cd /tmp/fmr3-deepest
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-deepest (master)
+$ exit
+exit
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-deeper (master)
+$ exit
+exit
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-sub (master)
+$ cd /tmp/fmr3-sub && bash
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-sub (master)
+$ claude
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ C:\Users\Chakri\AppData\Local\Temp\fmr3-sub
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-sub (master)
+$ cmd.exe //c "C:/Program Files/Git/bin/bash.exe"
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-sub (master)
+$ cd /tmp/fmr3-native
+
+Chakri@DESKTOP-A7PUCIK MINGW64 /tmp/fmr3-native (master)
+$
