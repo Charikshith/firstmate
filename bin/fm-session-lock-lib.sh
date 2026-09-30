@@ -64,6 +64,9 @@ fm_harness_path_name() {  # <path>
 # Whole words keep this safe the same way whole path components do above: api,
 # pipeline, and ompd are not pi or omp. A dot does not split, so a dot-directory
 # such as .pi or .omp (the fleet's own extension scripts) is never pi or omp.
+# Pi alone is too short a word to trust as any component, since an unrelated
+# script such as C:/work/pi/tool.js has one, so it is identified only by its own
+# package directory, pi-coding-agent.
 # Only arguments containing a slash are read, so a prompt word never identifies
 # a harness. Windows hosts only: elsewhere every harness retitles its process.
 fm_harness_word_name() {  # <args>
@@ -72,9 +75,11 @@ fm_harness_word_name() {  # <args>
   read -ra tokens <<< "$1"
   for token in "${tokens[@]:1}"; do
     case "$token" in */*) ;; *) continue ;; esac
+    case "$token/" in */pi-coding-agent/*) printf 'pi'; return 0 ;; esac
     IFS='/-_@"'"'" read -ra words <<< "$token"
     for word in "${words[@]}"; do
       for name in "${FM_HARNESS_NAMES[@]}"; do
+        [ "$name" != pi ] || continue
         [ "$word" = "$name" ] && { printf '%s' "$name"; return 0; }
       done
     done
@@ -180,10 +185,35 @@ fm_win_process_table() {
     }' 2>/dev/null
 }
 
+# Reduce command line $1 (forward slashes) to the harness evidence
+# fm_harness_process_matches reads from it, into FM_WIN_EVIDENCE: argv0 and each
+# argument that names a harness, every other argument replaced by "-" so each
+# verdict is unchanged. Prompts, flags, and secrets never reach memory or the
+# cache. A line that names no harness at all skips the per-argument pass.
+FM_WIN_EVIDENCE=''
+_fm_win_harness_evidence() {  # <cmdline>
+  local -a tokens
+  local token
+  read -ra tokens <<< "$1"
+  FM_WIN_EVIDENCE=${tokens[0]:-}
+  if [ "${#tokens[@]}" -gt 1 ] && ! [[ $1 =~ $FM_HARNESS_RE ]] \
+    && ! fm_harness_word_name "$1" >/dev/null; then
+    FM_WIN_EVIDENCE+=' -'
+    return 0
+  fi
+  for token in "${tokens[@]:1}"; do
+    if [[ $token =~ $FM_HARNESS_RE ]] || fm_harness_word_name "- $token" >/dev/null; then
+      FM_WIN_EVIDENCE+=" $token"
+    else
+      FM_WIN_EVIDENCE+=' -'
+    fi
+  done
+}
+
 # Load the table once per shell into sparse pid-indexed arrays. comm is the
 # executable path with forward slashes and no .exe suffix, so the shared matcher
-# sees the same shape it sees on macOS; args is the command line with forward
-# slashes. An empty or unreadable table fails closed.
+# sees the same shape it sees on macOS; args is only the command line's harness
+# evidence (_fm_win_harness_evidence). An empty or unreadable table fails closed.
 # A hot path now needs the file cache: bin/fm-lock.sh's own confirm-own-lock
 # check re-walks the ancestry inside $(...), which forks and loses this
 # in-memory flag, so every such call paid its own fresh multi-second
@@ -195,7 +225,7 @@ fm_win_process_table() {
 FM_WIN_TABLE_LOADED=0
 fm_win_table_load() {
   [ "$FM_WIN_TABLE_LOADED" -eq 1 ] && return 0
-  local table pid ppid created exe cmd rows=0
+  local table pid ppid created exe cmd rows=0 fresh=1 snapshot=''
   local cache_dir="${TMPDIR:-/tmp}" cache="${TMPDIR:-/tmp}/.fm-win-table.$$"
   # Sweep stale caches before adding this one: each is a single short-lived
   # script invocation's snapshot, so anything a couple of minutes old is a
@@ -204,11 +234,13 @@ fm_win_table_load() {
   # growth without needing coordinated cleanup across every source of this
   # shared library.
   find "$cache_dir" -maxdepth 1 -name '.fm-win-table.*' -mmin +2 -delete 2>/dev/null || true
-  if [ -s "$cache" ]; then
+  # Only a cache this user owns is trusted: in a shared TMPDIR another user
+  # could otherwise plant the snapshot this walk decides lock ownership from.
+  if [ -s "$cache" ] && [ -O "$cache" ] && [ ! -L "$cache" ]; then
     table=$(cat "$cache" 2>/dev/null)
+    fresh=0
   else
     table=$(fm_win_process_table | tr -d '\r') || return 1
-    printf '%s' "$table" > "$cache" 2>/dev/null || true
   fi
   FM_WIN_PPID=() FM_WIN_CREATED=() FM_WIN_COMM=() FM_WIN_ARGS=()
   while IFS=$'\t' read -r pid ppid created exe cmd; do
@@ -216,15 +248,22 @@ fm_win_table_load() {
     [ -n "$exe" ] || continue
     exe=${exe//\\//}
     case "$exe" in *.[eE][xX][eE]) exe=${exe%.*} ;; esac
+    _fm_win_harness_evidence "${cmd//\\//}"
     FM_WIN_PPID[pid]=$ppid
     FM_WIN_CREATED[pid]=$created
     FM_WIN_COMM[pid]=$exe
-    FM_WIN_ARGS[pid]=${cmd//\\//}
+    FM_WIN_ARGS[pid]=$FM_WIN_EVIDENCE
+    [ "$fresh" -eq 0 ] || snapshot+="$pid"$'\t'"$ppid"$'\t'"$created"$'\t'"$exe"$'\t'"$FM_WIN_EVIDENCE"$'\n'
     rows=$((rows + 1))
   done <<EOF
 $table
 EOF
   [ "$rows" -gt 0 ] || return 1
+  # The cache holds the parsed columns only, never a raw command line, and is
+  # created readable by this user alone.
+  if [ "$fresh" -eq 1 ] && [ ! -e "$cache" ]; then
+    (umask 077 && printf '%s' "$snapshot" > "$cache") 2>/dev/null || true
+  fi
   FM_WIN_TABLE_LOADED=1
 }
 

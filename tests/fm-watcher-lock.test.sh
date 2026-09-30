@@ -373,44 +373,6 @@ test_lock_steals_dead_pid_lock() {
   pass "dead-pid stale lock is reclaimed by a single acquirer"
 }
 
-# Git Bash/MSYS on Windows silently falls back to an NTFS directory junction
-# for `ln -s <dir> <name>` when it lacks the privilege for a real symlink (no
-# admin, no Developer Mode): readlink cannot decode a junction's reparse data
-# even though ordinary traversal through it works fine, and this was
-# observed to leave every fm_lock_try_acquire call unable to confirm its own
-# freshly created lock, spinning forever. Unsetting MSYS forces that
-# fallback here regardless of the host's own symlink privilege, so this
-# exercises the fix everywhere, not only on a Windows host missing Developer
-# Mode; on a host where MSYS is not consulted at all, ln -s still makes a
-# real symlink and the same assertions cover that path instead.
-test_lock_acquire_release_survives_windows_junction_fallback() {
-  local dir state lockdir out rc marker
-  dir=$(make_case lock-junction-fallback)
-  state="$dir/state"
-  lockdir="$state/.contend.lock"
-  rc=0
-  out=$(FM_STATE_OVERRIDE="$state" bash -c '
-    unset MSYS
-    . "$1"
-    fm_lock_try_acquire "$2" || exit 7
-    [ -f "$2.owner-name" ] && cat "$2.owner-name" || echo MISSING-MARKER
-    cat "$2/pid"
-    fm_lock_release "$2"
-    [ -e "$2" ] && echo STILL-THERE || echo GONE
-    [ -f "$2.owner-name" ] && echo MARKER-LEAKED || echo MARKER-CLEAN
-  ' _ "$LIB" "$lockdir") || rc=$?
-  [ "$rc" -eq 0 ] || fail "acquire under a forced junction fallback failed (rc=$rc): $out"
-  marker=$(printf '%s\n' "$out" | sed -n 1p)
-  case "$marker" in
-    MISSING-MARKER) fail "no owner marker was published for the fallback lock" ;;
-    *"$lockdir.owner"*) ;;
-    *) fail "owner marker did not name an owner directory: $marker" ;;
-  esac
-  printf '%s\n' "$out" | grep -qx GONE || fail "lockdir remained after release: $out"
-  printf '%s\n' "$out" | grep -qx MARKER-CLEAN || fail "owner marker was not cleaned up on release: $out"
-  pass "acquire, marker publication, and release all survive a forced junction fallback"
-}
-
 # Start a process that claims each given link lock, then SIGKILL it so every
 # claim is left behind with a dead owner - an acquirer TERMed mid-steal.
 leave_dead_link_locks() {  # <state> <lock>...
@@ -778,6 +740,157 @@ test_lock_paused_mid_acquire_claim_fails_during_steal() {
   pid=${out#*pid=}; pid=${pid%% *}
   [ -n "$pid" ] || fail "stealer claim did not record a pid: $out"
   pass "paused mid-acquire claimant backs off to active stealer"
+}
+
+# --- Windows mkdir lock scheme ---------------------------------------------
+# A Windows host locks with an atomic mkdir instead of a symlink. This wrapper
+# forces that scheme on every host, so the cases below and the generic race
+# cases re-run through it exercise it deterministically everywhere.
+MKDIR_LIB="$TMP_ROOT/fm-wake-lib-mkdir.sh"
+cat > "$MKDIR_LIB" <<SH
+. "$LIB"
+fm_lock_mkdir_host() { return 0; }
+SH
+
+# The forced scheme must actually be the one under test: the held lock is a
+# plain directory recording its holder, not a link, and release removes it
+# without leaving anything beside it.
+test_mkdir_lock_acquire_release_leaves_nothing() {
+  local dir state lockdir out rc
+  dir=$(make_case lock-mkdir-basic)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  rc=0
+  out=$(FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2" || exit 7
+    [ -d "$2" ] && [ ! -L "$2" ] && echo PLAIN-DIR
+    [ "$(cat "$2/pid")" = "${BASHPID:-$$}" ] && echo OWN-PID
+    [ "$FM_LOCK_OWNER_DIR" = "$2" ] && echo OWNER-IS-LOCK
+    fm_lock_release "$2"
+  ' _ "$MKDIR_LIB" "$lockdir") || rc=$?
+  [ "$rc" -eq 0 ] || fail "mkdir-scheme acquire failed (rc=$rc): $out"
+  for want in PLAIN-DIR OWN-PID OWNER-IS-LOCK; do
+    printf '%s\n' "$out" | grep -qx "$want" || fail "mkdir-scheme lock missing $want: $out"
+  done
+  [ -z "$(ls -A "$state")" ] || fail "mkdir-scheme release left entries: $(ls -A "$state")"
+  pass "mkdir-scheme lock is a plain directory owned by its holder and release leaves nothing"
+}
+
+# A reaper that verified a dead steal mutex must not remove the successor a
+# competing reaper created in the meantime: its election rename names the old
+# instance's token, which the successor directory does not carry.
+test_mkdir_lock_steal_reap_cannot_remove_successor() {
+  local dir state steal fakebin out rc
+  dir=$(make_case lock-mkdir-reap-race)
+  state="$dir/state"
+  steal="$state/.contend.lock.steal"
+  fakebin="$dir/fakebin"
+  out="$dir/competitor"
+  LIB=$MKDIR_LIB leave_dead_link_locks "$state" "$steal"
+  cat > "$fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+for arg do
+  case "$arg" in "$FM_TEST_RACE_PATH"/owner.*) race=1 ;; esac
+done
+if [ -n "${race:-}" ] && mkdir "$FM_TEST_RACE_ONCE" 2>/dev/null; then
+  bash -c '
+    . "$1"
+    if fm_lock_try_acquire_steal_mutex "$2"; then
+      printf "won %s\n" "${BASHPID:-$$}" > "$3"
+      exec sleep 30
+    fi
+    printf "lost\n" > "$3"
+  ' _ "$FM_TEST_LIB" "$FM_TEST_RACE_PATH" "$FM_TEST_RACE_OUT" >/dev/null 2>&1 &
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$FM_TEST_RACE_OUT" ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+fi
+exec /bin/mv "$@"
+SH
+  chmod +x "$fakebin/mv"
+
+  rc=0
+  PATH="$fakebin:$PATH" FM_TEST_LIB="$MKDIR_LIB" FM_TEST_RACE_PATH="$steal" \
+    FM_TEST_RACE_ONCE="$dir/race-once" FM_TEST_RACE_OUT="$out" \
+    FM_STATE_OVERRIDE="$state" bash -c '
+      . "$1"
+      fm_lock_try_acquire_steal_mutex "$2" || exit 1
+      [ "$(cat "$2/pid" 2>/dev/null)" = "${BASHPID:-$$}" ] || exit 2
+    ' _ "$MKDIR_LIB" "$steal" || rc=$?
+  [ -d "$dir/race-once" ] || fail "mkdir reap race hook never fired"
+  case "$(cat "$out" 2>/dev/null || true)" in
+    won\ *)
+      kill -KILL "$(sed 's/^won //' "$out")" 2>/dev/null || true
+      [ "$rc" -ne 0 ] || fail "competing mkdir reapers both hold the steal mutex"
+      ;;
+    lost)
+      [ "$rc" -eq 0 ] || fail "no reaper acquired the dead mkdir steal mutex (rc=$rc)"
+      ;;
+    *) fail "competing mkdir reaper did not report an outcome" ;;
+  esac
+  pass "a competing reaper cannot remove the successor's mkdir steal mutex"
+}
+
+# A reaper killed after winning its election leaves its tombstone token; a
+# later acquirer re-elects itself from it instead of wedging on it.
+test_mkdir_lock_recovers_dead_reaper_tombstone() {
+  local dir state lockdir rc token
+  dir=$(make_case lock-mkdir-dead-reaper)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  mkdir "$lockdir"
+  printf '%s\n' "$(dead_pid)" > "$lockdir/pid"
+  LIB=$MKDIR_LIB leave_dead_link_locks "$state" "$lockdir.steal"
+  for token in "$lockdir.steal"/owner.*; do
+    mv -- "$token" "$token.reaped.$(dead_pid)"
+  done
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2" || exit 8
+    [ "$(cat "$2/pid" 2>/dev/null)" = "${BASHPID:-$$}" ] || exit 9
+    fm_lock_release "$2"
+  ' _ "$MKDIR_LIB" "$lockdir" || rc=$?
+  [ "$rc" -eq 0 ] || fail "dead reaper tombstone blocked reclaiming a dead-owner lock (rc=$rc)"
+  [ ! -e "$lockdir.steal" ] || fail "dead reaper tombstone left the steal mutex behind"
+  pass "a mkdir steal reap abandoned by a dead reaper is re-elected"
+}
+
+# A creator stalled between mkdir and its pid write is alive, so its old,
+# pid-less directory is never reclaimed under it; once it is dead it is.
+test_mkdir_lock_spares_stalled_live_creator() {
+  local dir state lockdir live out
+  dir=$(make_case lock-mkdir-stalled-creator)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  sleep 300 &
+  live=$!
+  mkdir "$lockdir"
+  : > "$lockdir/owner.$live.1"
+  touch -t 202001010000 "$lockdir"
+  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    if fm_lock_try_acquire "$2"; then echo WON; else echo REFUSED; fi
+  ' _ "$MKDIR_LIB" "$lockdir")
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  [ "$out" = REFUSED ] || fail "stalled live creator's lock was reclaimed: $out"
+  [ -f "$lockdir/owner.$live.1" ] || fail "stalled live creator's token was removed"
+  touch -t 202001010000 "$lockdir"
+  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    if fm_lock_try_acquire "$2"; then echo WON; else echo REFUSED; fi
+  ' _ "$MKDIR_LIB" "$lockdir")
+  [ "$out" = WON ] || fail "dead creator's pid-less lock was not reclaimed: $out"
+  pass "mkdir-scheme lock spares a stalled live creator and reclaims a dead one"
+}
+
+# Run a generic lock case against the forced mkdir scheme.
+with_mkdir_lock() {  # <test-function>
+  TMP_ROOT="$TMP_ROOT/mkdir-scheme" LIB=$MKDIR_LIB "$1"
 }
 
 test_watch_restart_rejects_reused_pid() {
@@ -1597,18 +1710,35 @@ test_live_stalled_watch_lock_is_replaced_past_hard_bound
 test_guard_warnings
 test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
-test_lock_acquire_release_survives_windows_junction_fallback
 test_lock_stale_steal_single_winner_under_concurrency
-test_lock_reclaims_dead_steal_owner_without_nested_markers
 test_lock_recovers_dead_nested_steal_chain
-test_lock_steal_reap_cannot_remove_successor
 test_lock_reclaims_self_held_steal_mutex
-test_lock_resumes_own_interrupted_steal_reap
 test_lock_live_steal_mutex_is_not_reclaimed
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
-test_lock_late_claim_loses_after_recreate
-test_lock_paused_mid_acquire_claim_fails_during_steal
+# These drive the symlink scheme's own links and owner directories, which a
+# Windows host never creates; the mkdir cases below cover that host instead.
+if [ -r "/proc/$$/winpid" ]; then
+  printf 'ok - symlink lock scheme internals # SKIP no symlink lock scheme on a Windows host\n'
+else
+  test_lock_reclaims_dead_steal_owner_without_nested_markers
+  test_lock_steal_reap_cannot_remove_successor
+  test_lock_resumes_own_interrupted_steal_reap
+  test_lock_late_claim_loses_after_recreate
+  test_lock_paused_mid_acquire_claim_fails_during_steal
+fi
+test_mkdir_lock_acquire_release_leaves_nothing
+test_mkdir_lock_steal_reap_cannot_remove_successor
+test_mkdir_lock_recovers_dead_reaper_tombstone
+test_mkdir_lock_spares_stalled_live_creator
+with_mkdir_lock test_lock_single_winner_under_concurrency
+with_mkdir_lock test_lock_steals_dead_pid_lock
+with_mkdir_lock test_lock_stale_steal_single_winner_under_concurrency
+with_mkdir_lock test_lock_recovers_dead_nested_steal_chain
+with_mkdir_lock test_lock_reclaims_self_held_steal_mutex
+with_mkdir_lock test_lock_live_steal_mutex_is_not_reclaimed
+with_mkdir_lock test_lock_does_not_steal_live_lock
+with_mkdir_lock test_lock_empty_pid_uses_minimum_grace
 test_watch_restart_rejects_reused_pid
 test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover
