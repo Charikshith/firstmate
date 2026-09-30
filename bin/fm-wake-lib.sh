@@ -1189,7 +1189,10 @@ fm_lock_reap_dead_dir() {  # <lockdir>
   done
   if [ -z "$token" ]; then
     fm_lock_mid_acquire_is_fresh "$lockdir" "" && return 1
-    rmdir "$lockdir" 2>/dev/null
+    rmdir "$lockdir" 2>/dev/null && return 0
+    pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_recheck_stale_owner "$lockdir" "" "$pid" || return 1
+    fm_lock_remove_dir "$lockdir"
     return
   fi
   case "$token" in
@@ -1330,10 +1333,20 @@ fm_lock_try_acquire() {
   return "$rc"
 }
 
+# Random jitter in [0.05, 0.15)s between retries. A fixed interval lets two
+# contenders that started their wait loops close together stay in lockstep,
+# each one's claim tripping the other's steal-mutex guard on every single
+# cycle - a real livelock observed under concurrent lock confirmations on
+# Windows, not merely slow contention. Jitter breaks the synchronization.
+fm_lock_retry_sleep() {
+  local ms=$(( (RANDOM % 100) + 50 ))
+  sleep "$(printf '0.%03d' "$ms")"
+}
+
 fm_lock_acquire_wait() {
   local lockdir=$1
   while ! fm_lock_try_acquire "$lockdir"; do
-    sleep 0.1
+    fm_lock_retry_sleep
   done
 }
 
@@ -1346,7 +1359,7 @@ fm_lock_acquire_wait_max() {  # <lockdir> <max-seconds>
   deadline=$((SECONDS + seconds))
   while ! fm_lock_try_acquire "$lockdir"; do
     [ "$SECONDS" -lt "$deadline" ] || return 1
-    sleep 0.1
+    fm_lock_retry_sleep
   done
 }
 

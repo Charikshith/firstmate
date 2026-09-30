@@ -888,6 +888,32 @@ test_mkdir_lock_spares_stalled_live_creator() {
   pass "mkdir-scheme lock spares a stalled live creator and reclaims a dead one"
 }
 
+# A dead holder's steal mutex left as a tokenless directory copy (the former
+# Windows link fallback) still holds its pid, so rmdir alone cannot remove it;
+# it is reclaimed by its dead pid instead of wedging every later steal.
+test_mkdir_lock_reclaims_tokenless_dead_steal_copy() {
+  local dir state lockdir rc
+  dir=$(make_case lock-mkdir-tokenless-steal)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  mkdir "$lockdir" "$lockdir.steal"
+  printf '%s
+' "$(dead_pid)" > "$lockdir/pid"
+  printf '%s
+' "$(dead_pid)" > "$lockdir.steal/pid"
+  touch -t 202001010000 "$lockdir.steal"
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_try_acquire "$2" || exit 8
+    [ "$(cat "$2/pid" 2>/dev/null)" = "${BASHPID:-$$}" ] || exit 9
+    fm_lock_release "$2"
+  ' _ "$MKDIR_LIB" "$lockdir" || rc=$?
+  [ "$rc" -eq 0 ] || fail "tokenless dead steal copy wedged reclaiming a dead-owner lock (rc=$rc)"
+  [ ! -e "$lockdir.steal" ] || fail "tokenless dead steal copy was left behind"
+  pass "a tokenless dead steal-mutex copy is reclaimed under the mkdir scheme"
+}
+
 # Run a generic lock case against the forced mkdir scheme.
 with_mkdir_lock() {  # <test-function>
   TMP_ROOT="$TMP_ROOT/mkdir-scheme" LIB=$MKDIR_LIB "$1"
@@ -1731,6 +1757,7 @@ test_mkdir_lock_acquire_release_leaves_nothing
 test_mkdir_lock_steal_reap_cannot_remove_successor
 test_mkdir_lock_recovers_dead_reaper_tombstone
 test_mkdir_lock_spares_stalled_live_creator
+test_mkdir_lock_reclaims_tokenless_dead_steal_copy
 with_mkdir_lock test_lock_single_winner_under_concurrency
 with_mkdir_lock test_lock_steals_dead_pid_lock
 with_mkdir_lock test_lock_stale_steal_single_winner_under_concurrency
