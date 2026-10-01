@@ -615,6 +615,8 @@ test_windows_interpreter_hosted_harness_is_found_by_script_word() {
     'C:\Users\u\AppData\Roaming\npm\node_modules\lavish-axi\dist\cli.mjs' \
     'C:\work\api-client\index.js' \
     'C:\work\pipeline\run.js' \
+    'C:\work\pi\tool.js' \
+    'C:\tools\pi-helper\main.js' \
     'C:\Users\u\firstmate\.pi\extensions\lib\fm-sessionstart-supervisor.mjs' \
     'C:\work\tool.js fix the pi bug'; do
     write_node_table "$script"
@@ -623,6 +625,36 @@ test_windows_interpreter_hosted_harness_is_found_by_script_word() {
     fi
   done
   pass "session-lock windows: a node-hosted harness is found by an exact word of its script path"
+}
+
+# The Win32 table cache is shared by a script's subshells under TMPDIR, so it
+# must hold no command line, be readable by its owner alone, and still let a
+# walk served from it find a node-hosted harness.
+test_windows_table_cache_holds_no_command_line() {
+  local dir table got owner_only
+  dir="$TMP_ROOT/win-cache"
+  mkdir -p "$dir/tmp"
+  table="$dir/table"
+  printf '%s\n' '10|30|500|C:\Program Files\Git\usr\bin\bash.exe|bash.exe -c "export TOKEN=hunter2"' \
+    '30|40|300|C:\Program Files\nodejs\node.exe|"C:\Program Files\nodejs\node.exe" C:\npm\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js --api-key sk-hunter2 -p "hunter2 prompt"' \
+    '40|4|200|C:\Program Files\PowerShell\7\pwsh.exe|pwsh.exe -Command hunter2' > "$table"
+  got=$(TMPDIR="$dir/tmp" win_eval "$table" '
+    fm_win_table_load || exit 3
+    printf "%s\n" "${FM_WIN_ARGS[@]}" > "$TMPDIR/args.copy"
+    cat "$TMPDIR"/.fm-win-table.* > "$TMPDIR/cache.copy" || exit 4
+    FM_WIN_TABLE_LOADED=0
+    fm_win_process_table() { return 1; }
+    fm_harness_ancestry_pid') || fail "windows: a walk served from the table cache failed"
+  [ "$got" = 30 ] || fail "windows: cached walk resolved '$got', expected node.exe pid 30"
+  grep -q 'pi-coding-agent' "$dir/tmp/cache.copy" || fail "windows: the table cache was not written"
+  if grep -q hunter2 "$dir/tmp/cache.copy" "$dir/tmp/args.copy"; then
+    fail "windows: a command-line secret reached the table cache or memory"
+  fi
+  if [ ! -r "/proc/$$/winpid" ]; then
+    owner_only=$(find "$dir/tmp" -name '.fm-win-table.*' -perm 600)
+    [ -n "$owner_only" ] || fail "windows: the table cache is not owner-only"
+  fi
+  pass "session-lock windows: the table cache keeps harness evidence only, owner-only"
 }
 
 # The word rule is Windows-only: a POSIX harness retitles its own process.
@@ -1319,6 +1351,7 @@ test_windows_parent_must_provably_predate_its_child
 test_windows_harness_beyond_a_gap_never_owns_the_lock
 test_windows_unreadable_table_fails_closed
 test_windows_interpreter_hosted_harness_is_found_by_script_word
+test_windows_table_cache_holds_no_command_line
 test_posix_interpreter_script_word_is_not_a_harness
 # The real-process fixtures below stand in for a harness with an MSYS bash
 # (named claude, or handed CLAUDE_PID=$$) and assert POSIX pids; on a Windows

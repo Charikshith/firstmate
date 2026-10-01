@@ -16,7 +16,8 @@ Install these first, then open a new terminal so `PATH` picks them up:
 
 ## 2. Symlinks and line endings
 
-Firstmate tracks a symlink (`.claude/skills`, which is how Claude Code finds firstmate's bundled skills) and relies on real symlinks for its directory locks.
+Firstmate tracks one symlink, `.claude/skills`, which is how Claude Code finds firstmate's bundled skills, and that link is what needs real symlinks and Developer Mode.
+Firstmate's directory locks do not: on Windows they use atomic directory creation instead of symlinks.
 Git for Windows disables symlinks by default and converts line endings, and both break firstmate.
 
 1. Turn on Windows Developer Mode: Settings, then System, then For developers, then Developer Mode.
