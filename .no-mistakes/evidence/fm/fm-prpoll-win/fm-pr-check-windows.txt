@@ -1,0 +1,43 @@
+=== BASE-0cc135eb: fm-pr-check.sh t1 https://github.com/Charikshith/firstmate/pull/5 (native Windows winpid=27400)
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+error: could not prepare PR poll
+exit=1
+--- t1.meta (CR bytes: 0)
+kind=ship
+mode=no-mistakes
+worktree=/tmp/fm-lab.xt0SSW/projects/wt
+project=firstmate
+--- state dir
+.guard-watcher-stale-banner
+t1.meta
+=== TARGET-a307e3e1: fm-pr-check.sh t1 https://github.com/Charikshith/firstmate/pull/5 (native Windows winpid=27400)
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  WATCHER DOWN - SUPERVISION IS OFF
+●  1 task(s) in flight, but no watcher has a fresh beacon (last beat: never, grace 300s).
+●  Trust the emitted supervision protocol for this harness; do not use shell & for watcher repair.
+●  This is a supervision warning only; the guarded operation WILL still run.
+●  watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn.
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+armed: state/t1.check.sh
+exit=0
+--- t1.meta (CR bytes: 0)
+kind=ship
+mode=no-mistakes
+worktree=/tmp/fm-lab.s4crKK/projects/wt
+project=firstmate
+pr=https://github.com/Charikshith/firstmate/pull/5
+pr_head=ba8fbc3aa4db3b3e4575cd2224929471532aeb0f
+--- state dir
+.guard-watcher-stale-banner
+contributions.check.sh
+contributions.check-trust
+t1.check.sh
+t1.meta
+t1.pr-poll
+t1.pr-poll-registration

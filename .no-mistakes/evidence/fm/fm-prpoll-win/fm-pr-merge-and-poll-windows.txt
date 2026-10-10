@@ -1,0 +1,33 @@
+=== BASE-0cc135eb: fm-pr-merge.sh t1 https://github.com/Charikshith/firstmate/pull/5   (PR #5 is already MERGED on GitHub)
+error: could not prepare PR poll
+exit=1
+--- t1.meta:
+kind=ship
+mode=no-mistakes
+worktree=/tmp/fm-lab.fls0J7/projects/wt
+project=firstmate
+=== TARGET-a307e3e1: fm-pr-merge.sh t1 https://github.com/Charikshith/firstmate/pull/5   (PR #5 is already MERGED on GitHub)
+armed: state/t1.check.sh
+error: refusing to merge https://github.com/Charikshith/firstmate/pull/5
+  - state is "MERGED", not open
+  - mergeable is "UNKNOWN", not MERGEABLE
+exit=1
+--- t1.meta:
+kind=ship
+mode=no-mistakes
+worktree=/tmp/fm-lab.XRAyWa/projects/wt
+project=firstmate
+pr=https://github.com/Charikshith/firstmate/pull/5
+pr_head=ba8fbc3aa4db3b3e4575cd2224929471532aeb0f
+=== TARGET: arm then run the armed watcher check state/t1.check.sh
+armed: state/t1.check.sh
+merged
+check exit=0
+--- state after check:
+.guard-watcher-stale-banner
+contributions.check.sh
+contributions.check-trust
+t1.check.sh
+t1.meta
+t1.pr-poll
+t1.pr-poll-registration
