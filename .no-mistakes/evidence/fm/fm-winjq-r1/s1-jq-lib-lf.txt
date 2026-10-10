@@ -1,0 +1,18 @@
+== raw jq.exe output bytes (no lib):
+0000000   t   -   1  \r  \n
+0000005
+== jq after sourcing bin/fm-jq-lib.sh:
+jq is a function
+jq () 
+0000000   t   -   1  \n
+0000004
+captured value equals t-1: YES
+== without lib comparison:
+captured value equals t-1: YES
+
+== multi-field read loop WITHOUT lib (fields carry CR):
+field corrupted: 0000000   t   -   1  \r
+field corrupted: 0000000   /   x  \r
+== same loop WITH bin/fm-jq-lib.sh sourced:
+field ok: t-1
+field ok: /x

@@ -1,0 +1,102 @@
+ok - only required-captain contributions are rows; other actors are counted
+ok - replaced-head verdict is stale and cannot create a captain requirement
+ok - unchecked ownership is disclosed and cannot prove silence
+ok - newest check with no verdict is distinct from passing and pending
+not ok - new maintainer comment must survive as a pending outward signal
+not ok - new maintainer review must survive as a pending outward signal
+not ok - new maintainer inline must survive as a pending outward signal
+not ok - ready-for-pr on an explicitly filed issue must become a planning wake
+not ok - a fresh open issue did not remain measured maintainer triage
+not ok - repeated polling erased the absent lane from measured readiness
+ok - mixed freshness retains measured captain work and discloses the gap
+ok - malformed durable evidence cannot prove silence
+not ok - add/remove between polls lost ready-for-pr transition
+not ok - changed published head reused a current verdict
+not ok - a current forge observation did not refresh a verdict on its observed head
+ok - an unavailable current head leaves verdict freshness unknown
+ok - away yolo delivery is fleet work without granting merge authority
+actionable: PR https://github.com/o/r/pull/8 is registered but its ready line did not reach the parent channel (rc=3)
+ok - cross-home away yolo delivery is fleet work
+ok - retired ownership persists and unsupported forge remains visibly unmeasured
+ok - unsupported forge coverage is disclosed without inventing fleet work
+ok - held unsupported forge coverage remains unmeasured
+not ok - shared contribution owners did not retain their separate acknowledgements
+not ok - watcher wrapped a durable contribution wake into diagnostics: 
+ok - expired child unsupported-forge coverage remains unmeasured
+not ok - watcher did not surface the new contribution signal: 
+ok - parent consumes measured child coverage and refuses expired child silence
+ok - unreadable pending signals refuse an empty-inbox claim
+fm-contributions: 3 unreadable contribution record(s); pending signals are unverified
+not ok - data root '/tmp/fm-contributions.5726tW/task-identity/data' named tasks , expected [
+  "*",
+  "-dash",
+  "café",
+  "dot.ted",
+  "nl",
+  "plain",
+  "two words"
+]
+ok - snapshot and pending create nothing in a home without state
+ok - budget exhausted mid-observation (exhaust) keeps the prior record and stays silent
+ok - budget exhausted mid-observation (hang) keeps the prior record and stays silent
+not ok - a genuine forge failure past the deadline was swallowed: contributions: observation unavailable for https://github.com/o/r/pull/8
+contributions: invalid durable task id
+not ok - a healthy shared observation printed: contributions: invalid durable task id
+not ok - a merged observation printed: contributions: invalid durable task id
+not ok - a late owner reactivated a terminal contribution: contributions: observation unavailable for https://github.com/o/r/pull/8
+contributions: invalid durable task id
+not ok - an owner whose saved row stayed open did not converge on the known terminal observation: {
+  "schema": "fm-contributions.v1",
+  "task": "duplicate",
+  "records": [
+    {
+      "url": "https://github.com/o/r/pull/8",
+      "kind": "pr",
+      "checked_at": "2026-09-15T08:00:00Z",
+      "error": null,
+      "pending": [
+        {
+          "token": "evt-1"
+        }
+      ],
+      "seen": [],
+      "verdict": null,
+      "observation": {
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "open",
+        "draft": false,
+        "mergeable": "mergeable",
+        "review_decision": "APPROVED",
+        "can_merge": false,
+        "checks": [
+          {
+            "name": "test",
+            "id": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-16T08:00:00Z"
+          }
+        ],
+        "reviews": [],
+        "events": []
+      },
+      "notified": [
+        "evt-0"
+      ]
+    }
+  ]
+}
+jq: error: Could not open file C:/Users/Chakri/AppData/Local/Temp/fm-contributions.5726tW/done-open/data/delivery/contributions.json: No such file or directory
+not ok - an open PR on a done task did not track its current head
+not ok - reservation poll printed an unavailable wake: contributions: invalid durable task id
+not ok - a fresh 3-second-read PR observation woke: contributions: invalid durable task id
+ok - a read killed at the five-second bound is budget refusal and stays silent
+not ok - a poll after an unmeasured URL printed a wake: contributions: invalid durable task id
+contributions: invalid durable task id
+ok - the effective budget is cut down to the watcher per-check bound with margin
+ok - generated checks enforce configured and inherited budgets at runtime
+not ok - the first failure of an episode did not wake: contributions: observation unavailable for https://github.com/o/r/pull/8
+contributions: invalid durable task id
+not ok - the initial failure did not wake: contributions: observation unavailable for https://github.com/o/r/pull/8
+contributions: invalid durable task id
+not ok - 24 contribution regressions

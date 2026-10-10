@@ -1,0 +1,32 @@
+== BASE 8fd488e2: install
+install rc=0
+   installed hook: 8:command -v jq >/dev/null 2>&1 || exit 0
+   installed hook: 9:workspace=$(jq -er 'select(.hook_event_name == "Stop") | .cwd | strings | select(length > 0)' <<< "$payload" 2>/dev/null) || exit 0
+hook rc=0
+RESULT: turn-end marker touched (crew wake fires)
+-- non-Stop event must stay passive:
+not touched (correct)
+-- reinstall over existing install (upgrade path):
+reinstall with target rc=0
+
+== TARGET 30ecf22b: install
+install rc=0
+   installed hook: 8:command -v jq >/dev/null 2>&1 || exit 0
+   installed hook: 9:jq_binary=
+   installed hook: 10:[ ! -r "/proc/$$/winpid" ] || jq_binary=-b
+   installed hook: 11:workspace=$(jq ${jq_binary:+"$jq_binary"} -er 'select(.hook_event_name == "Stop") | .cwd | strings | select(length > 0)' <<< "$payload" 2>/dev/null) || exit 0
+hook rc=0
+RESULT: turn-end marker touched (crew wake fires)
+-- non-Stop event must stay passive:
+not touched (correct)
+-- reinstall over existing install (upgrade path):
+reinstall with target rc=0
+== upgrade: base-installed hook, then target install
+0
+target install rc=0
+jq_binary lines after upgrade: 3
+fm-kimi-turnend-hook: refused: Firstmate hook script has unexpectedly broad permissions at C:/Users/Chakri/AppData/Local/Temp/fm-kimi.oBzncz/.kimi-code\fm-turn-end.sh.
+remove rc=1
+config.toml
+fm-turn-end.d
+fm-turn-end.sh

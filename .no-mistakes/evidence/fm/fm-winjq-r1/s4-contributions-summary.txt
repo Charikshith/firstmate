@@ -1,0 +1,11 @@
+fm-contributions.test.sh on native Windows (Git Bash, jq-1.7.1)
+BASE 8fd488e2:
+not ok - 24 contribution regressions
+  'invalid durable task id' lines: 10
+TARGET 30ecf22b:
+not ok - watcher did not surface contribution diagnostics: 
+not ok - watcher did not surface the new contribution signal: 
+not ok - data root '/tmp/fm-contributions.ilOYVm/task-identity/data' named tasks , expecte
+not ok - 3 contribution regressions
+  'invalid durable task id' lines: 0
+The 3 remaining target failures also fail on base: NTFS cannot hold task dirs named '*'/newline, and the two watcher-surface tests fail identically on both.

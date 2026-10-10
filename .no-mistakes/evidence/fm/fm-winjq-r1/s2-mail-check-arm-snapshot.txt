@@ -1,0 +1,23 @@
+== BASE 8fd488e2
+armed: state/mail.check.sh
+arm rc=0
+   -rwxr-xr-x 1 Chakri 197121 249 Oct 10 15:43 mail.check.sh
+   -rw-r--r-- 1 Chakri 197121  84 Oct 10 15:43 mail.check-trust
+registered: yes
+watcher snapshot prepare: REFUSED (check rejected)
+-- adversarial: tamper with shim bytes after arm
+tampered: REFUSED (correct)
+disarmed: state/mail.check.sh
+disarm rc=0
+
+== TARGET 30ecf22b
+armed: state/mail.check.sh
+arm rc=0
+   -rwxr-xr-x 1 Chakri 197121 308 Oct 10 15:43 mail.check.sh
+   -rw-r--r-- 1 Chakri 197121  84 Oct 10 15:43 mail.check-trust
+registered: yes
+watcher snapshot prepare: ACCEPTED (check would run)
+-- adversarial: tamper with shim bytes after arm
+tampered: REFUSED (correct)
+disarmed: state/mail.check.sh
+disarm rc=0
