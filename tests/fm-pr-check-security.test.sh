@@ -1444,6 +1444,70 @@ SH
   pass "returned custom check descendants are drained on installed and fallback timeout paths"
 }
 
+# A native Windows host cannot hold mode 600 on a file, so its merge authority
+# reads back 644 and must still be cleaned up; every other host refuses it.
+test_teardown_merge_authority_mode() {
+  local dir fakebin mode rc
+  for mode in 600 644; do
+    dir=$(make_case "teardown-merge-authority-$mode")
+    fakebin="$dir/fakebin"
+    fm_write_meta "$dir/home/state/task-a.meta" \
+      'window=firstmate:fm-task-a' \
+      'endpoint_task_id=task-a' \
+      "worktree=$dir/missing-worktree" \
+      "project=$dir/project" \
+      'kind=ship' \
+      'mode=local-only'
+    printf 'authority\n' > "$dir/home/state/task-a.merge-authority"
+    "$REAL_CHMOD" "$mode" "$dir/home/state/task-a.merge-authority"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/tmux"
+    chmod +x "$fakebin/tmux"
+    touch "$dir/home/state/.last-watcher-beat"
+    set +e
+    FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$fakebin:$BASE_PATH" \
+      "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+    rc=$?
+    set -e
+    if [ "$mode" = 600 ] || fm_pr_win_host; then
+      [ "$rc" -eq 0 ] || fail "teardown refused a merge authority this host accepts (mode $mode)"
+      [ ! -e "$dir/home/state/task-a.merge-authority" ] || fail "teardown left the merge authority (mode $mode)"
+      [ ! -e "$dir/home/state/task-a.meta" ] || fail "teardown left task metadata (mode $mode)"
+    else
+      [ "$rc" -ne 0 ] || fail "teardown accepted a group-readable merge authority"
+      grep -q 'REFUSED: unsafe task PR-check artifact' "$dir/teardown.err" \
+        || fail "teardown did not explain refusing a group-readable merge authority"
+      [ -e "$dir/home/state/task-a.merge-authority" ] && [ -e "$dir/home/state/task-a.meta" ] \
+        || fail "teardown removed state it refused to clean"
+    fi
+  done
+  # The other artifact checks still apply on every host, Windows included.
+  dir=$(make_case teardown-merge-authority-hardlink)
+  fakebin="$dir/fakebin"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    'window=firstmate:fm-task-a' \
+    'endpoint_task_id=task-a' \
+    "worktree=$dir/missing-worktree" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=local-only'
+  printf 'authority\n' > "$dir/home/state/task-a.merge-authority"
+  chmod 600 "$dir/home/state/task-a.merge-authority"
+  ln "$dir/home/state/task-a.merge-authority" "$dir/second-link" 2>/dev/null \
+    && [ "$(fm_pr_file_link_count "$dir/second-link")" = 2 ] \
+    || fail "could not hard-link the merge authority fixture"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+  touch "$dir/home/state/.last-watcher-beat"
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$fakebin:$BASE_PATH" \
+    "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown accepted a hard-linked merge authority"
+  [ -e "$dir/home/state/task-a.meta" ] || fail "teardown removed state for a hard-linked merge authority"
+  pass "teardown cleans a merge authority whose mode this host can hold and refuses the rest"
+}
+
 test_teardown_removes_poll_artifacts() {
   local dir fakebin artifact counterpart rc
   dir=$(make_case teardown-cleanup)
@@ -3483,4 +3547,5 @@ test_postrename_poll_validation_revokes_and_retries
 test_bootstrap_leaves_unauthenticated_checks
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
+test_teardown_merge_authority_mode
 test_teardown_removes_poll_artifacts
