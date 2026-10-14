@@ -28,6 +28,12 @@ REAL_CHMOD=$(command -v chmod)
 # depending on the host keeping jq in one of those four directories.
 REAL_JQ=$(command -v jq) || fail "these tests read glab's JSON with the real jq, which was not found"
 
+# A symlink to jq does not resolve on every host (Windows), so expose a shim.
+expose_jq() {  # <path>
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$REAL_JQ" > "$1"
+  chmod +x "$1"
+}
+
 ack_watcher_cycle() {  # <state>
   local state=$1 err sequence generation
   err="$state/.test-wake-drain.err"
@@ -324,6 +330,8 @@ run_merge_entry() {
 }
 
 # shellcheck disable=SC2016 # Literal rejected URL bytes are parser test data.
+# MSYS bash drops a trailing \r from a bare $'...' array word, so expand it.
+CR=$'\r'
 INVALID_URLS=(
   'https://gitlab.com/single/-/merge_requests/1'
   'https://gitlab.com/g/p/-/merge_requests/0'
@@ -372,7 +380,7 @@ INVALID_URLS=(
   'https://github.com/o/r/pull/1 '
   'https://github.com/o /r/pull/1'
   $'https://github.com/o/r/pull/1\t'
-  $'https://github.com/o/r/pull/1\r'
+  "https://github.com/o/r/pull/1$CR"
   $'https://github.com/o/r/pull/1\nnext'
   $'https://github.com/o/r/pull/1\r\nnext'
   $'https://github.com/o/r/pull/1\001'
@@ -1444,6 +1452,70 @@ SH
   pass "returned custom check descendants are drained on installed and fallback timeout paths"
 }
 
+# A native Windows host cannot hold mode 600 on a file, so its merge authority
+# reads back 644 and must still be cleaned up; every other host refuses it.
+test_teardown_merge_authority_mode() {
+  local dir fakebin mode rc
+  for mode in 600 644; do
+    dir=$(make_case "teardown-merge-authority-$mode")
+    fakebin="$dir/fakebin"
+    fm_write_meta "$dir/home/state/task-a.meta" \
+      'window=firstmate:fm-task-a' \
+      'endpoint_task_id=task-a' \
+      "worktree=$dir/missing-worktree" \
+      "project=$dir/project" \
+      'kind=ship' \
+      'mode=local-only'
+    printf 'authority\n' > "$dir/home/state/task-a.merge-authority"
+    "$REAL_CHMOD" "$mode" "$dir/home/state/task-a.merge-authority"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/tmux"
+    chmod +x "$fakebin/tmux"
+    touch "$dir/home/state/.last-watcher-beat"
+    set +e
+    FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$fakebin:$BASE_PATH" \
+      "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+    rc=$?
+    set -e
+    if [ "$mode" = 600 ] || fm_pr_win_host; then
+      [ "$rc" -eq 0 ] || fail "teardown refused a merge authority this host accepts (mode $mode)"
+      [ ! -e "$dir/home/state/task-a.merge-authority" ] || fail "teardown left the merge authority (mode $mode)"
+      [ ! -e "$dir/home/state/task-a.meta" ] || fail "teardown left task metadata (mode $mode)"
+    else
+      [ "$rc" -ne 0 ] || fail "teardown accepted a group-readable merge authority"
+      grep -q 'REFUSED: unsafe task PR-check artifact' "$dir/teardown.err" \
+        || fail "teardown did not explain refusing a group-readable merge authority"
+      [ -e "$dir/home/state/task-a.merge-authority" ] && [ -e "$dir/home/state/task-a.meta" ] \
+        || fail "teardown removed state it refused to clean"
+    fi
+  done
+  # The other artifact checks still apply on every host, Windows included.
+  dir=$(make_case teardown-merge-authority-hardlink)
+  fakebin="$dir/fakebin"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    'window=firstmate:fm-task-a' \
+    'endpoint_task_id=task-a' \
+    "worktree=$dir/missing-worktree" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=local-only'
+  printf 'authority\n' > "$dir/home/state/task-a.merge-authority"
+  chmod 600 "$dir/home/state/task-a.merge-authority"
+  ln "$dir/home/state/task-a.merge-authority" "$dir/second-link" 2>/dev/null \
+    && [ "$(fm_pr_file_link_count "$dir/second-link")" = 2 ] \
+    || fail "could not hard-link the merge authority fixture"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
+  touch "$dir/home/state/.last-watcher-beat"
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$fakebin:$BASE_PATH" \
+    "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown accepted a hard-linked merge authority"
+  [ -e "$dir/home/state/task-a.meta" ] || fail "teardown removed state for a hard-linked merge authority"
+  pass "teardown cleans a merge authority whose mode this host can hold and refuses the rest"
+}
+
 test_teardown_removes_poll_artifacts() {
   local dir fakebin artifact counterpart rc
   dir=$(make_case teardown-cleanup)
@@ -1558,7 +1630,7 @@ test_gerrit_merge_watch() {
   # The Gerrit branch reads its status with the real jq, and BASE_PATH is
   # deliberately restricted, so this exposes jq explicitly rather than depending
   # on the host keeping it in one of those four directories.
-  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
+  expose_jq "$dir/fakebin/jq"
 
   write_poll_meta "$state" task-a "$url"
   fm_pr_poll_prepare "$state" task-a gerrit "$url" gerrit.example group/apps/console 4201 "$POLL" \
@@ -1706,7 +1778,7 @@ test_gerrit_arming_records_no_patch_set_revision() {
   local dir state rc out
   dir=$(make_case gerrit-arming)
   state="$dir/home/state"
-  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
+  expose_jq "$dir/fakebin/jq"
 
   write_task_meta "$dir" task-rev
   FM_TEST_GERRIT_REVISION=$(git -C "$dir/wt" rev-parse HEAD) run_check_entry "$dir" task-rev \
@@ -1748,7 +1820,7 @@ test_gerrit_ready_gate_reads_the_published_tree() {
   local dir state base published other out rc
   dir=$(make_case gerrit-ready-gate)
   state="$dir/home/state"
-  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
+  expose_jq "$dir/fakebin/jq"
   base=$(git -C "$dir/wt" rev-parse HEAD)
   printf 'one\n' > "$dir/wt/a"
   git -C "$dir/wt" add a
@@ -1832,7 +1904,7 @@ test_gerrit_nm_ready_gate_requires_recovered_custody() {
   local dir state base unfixed fixed stamped squash elsewhere out rc url line
   dir=$(make_case gerrit-custody-gate)
   state="$dir/home/state"
-  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
+  expose_jq "$dir/fakebin/jq"
   url=https://gerrit.example/c/group/apps/console/+/4201
   line="done: PR $url published for review"
   base=$(git -C "$dir/wt" rev-parse HEAD)
@@ -2066,7 +2138,7 @@ EOF
   : > "$dir/glab.log"
   # The merge path needs jq before it reads anything, so this case supplies it
   # and the refusal below is the unreadable state rather than a missing tool.
-  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
+  expose_jq "$dir/fakebin/jq"
   set +e
   run_merge_entry "$dir" task-c "$url" >/dev/null 2> "$dir/merge-c.err"
   rc=$?
@@ -3483,4 +3555,5 @@ test_postrename_poll_validation_revokes_and_retries
 test_bootstrap_leaves_unauthenticated_checks
 test_custom_snapshot_cleanup_on_signal
 test_returned_custom_check_descendants_are_drained
+test_teardown_merge_authority_mode
 test_teardown_removes_poll_artifacts
